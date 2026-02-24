@@ -1,4 +1,5 @@
 #include <sprawn/frontend.h>
+#include <sprawn/document.h>
 
 #include "window.h"
 #include "font.h"
@@ -179,6 +180,15 @@ Frontend& Frontend::operator=(Frontend&&) noexcept = default;
 
 void Frontend::set_text(std::string_view utf8_text) {
     impl_->layout->set_text(utf8_text);
+}
+
+void Frontend::set_document(const Document& doc) {
+    std::string text;
+    for (std::size_t i = 0; i < doc.line_count(); ++i) {
+        if (i > 0) text += '\n';
+        text += doc.line(i);
+    }
+    set_text(text);
 }
 
 void Frontend::scroll_to_line(std::size_t line) {

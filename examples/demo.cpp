@@ -1,4 +1,5 @@
 #include <sprawn/frontend.h>
+#include <sprawn/backend.h>
 
 #include <sstream>
 #include <string>
@@ -50,7 +51,7 @@ static std::string generate_demo_text() {
     return oss.str();
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     sprawn::FrontendConfig config;
     config.window_width = 1024;
     config.window_height = 768;
@@ -58,7 +59,20 @@ int main() {
     config.font_size = 16;
 
     sprawn::Frontend frontend(config);
-    frontend.set_text(generate_demo_text());
+
+    if (argc > 1) {
+        sprawn::Backend backend;
+        backend.open_file(argv[1]);
+
+        config.title = std::string("Sprawn - ") + argv[1];
+        const auto* doc = backend.document();
+        if (doc) {
+            frontend.set_document(*doc);
+        }
+    } else {
+        frontend.set_text(generate_demo_text());
+    }
+
     frontend.run();
 
     return 0;

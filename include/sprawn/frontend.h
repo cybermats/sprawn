@@ -7,6 +7,9 @@
 
 namespace sprawn {
 
+class Document;
+
+
 struct FrontendConfig {
     int window_width = 800;
     int window_height = 600;
@@ -27,6 +30,7 @@ public:
     Frontend& operator=(Frontend&&) noexcept;
 
     void set_text(std::string_view utf8_text);
+    void set_document(const Document& doc);
     void scroll_to_line(std::size_t line);
 
     // Blocking event loop — returns when window is closed.

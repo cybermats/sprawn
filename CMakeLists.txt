@@ -11,4 +11,5 @@ pkg_check_modules(FREETYPE REQUIRED IMPORTED_TARGET freetype2)
 pkg_check_modules(HARFBUZZ REQUIRED IMPORTED_TARGET harfbuzz)
 
 add_subdirectory(src/frontend)
+add_subdirectory(src/backend)
 add_subdirectory(examples)
