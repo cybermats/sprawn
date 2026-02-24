@@ -1,6 +1,7 @@
 add_library(sprawn_backend STATIC
     backend.cpp
     file_source.cpp
+    lorem_ipsum_source.cpp
     string_array_document.cpp
 )
 

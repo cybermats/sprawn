@@ -25,6 +25,9 @@ public:
     // Convenience: open a file by path.
     void open_file(const std::string& path);
 
+    // Convenience: generate lorem ipsum text with the given number of lines.
+    void open_lorem_ipsum(std::size_t num_lines);
+
     // Generic: load from any Source.
     void load_from(std::unique_ptr<Source> source);
 

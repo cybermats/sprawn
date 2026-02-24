@@ -1,6 +1,7 @@
 #include <sprawn/backend.h>
 
 #include "file_source.h"
+#include "lorem_ipsum_source.h"
 #include "string_array_document.h"
 
 #include <vector>
@@ -54,6 +55,10 @@ Backend& Backend::operator=(Backend&&) noexcept = default;
 
 void Backend::open_file(const std::string& path) {
     load_from(std::make_unique<detail::FileSource>(path));
+}
+
+void Backend::open_lorem_ipsum(std::size_t num_lines) {
+    load_from(std::make_unique<detail::LoremIpsumSource>(num_lines));
 }
 
 void Backend::load_from(std::unique_ptr<Source> source) {
