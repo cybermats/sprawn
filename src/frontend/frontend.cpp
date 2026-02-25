@@ -76,6 +76,8 @@ struct Frontend::Impl {
     std::unique_ptr<detail::TextLayout> layout;
     std::unique_ptr<detail::Renderer> renderer;
     bool running = false;
+    bool scrollbar_dragging_ = false;
+    int drag_offset_ = 0;  // offset from top of thumb to click point
 
     void init() {
         window = std::make_unique<detail::Window>(
@@ -120,6 +122,54 @@ struct Frontend::Impl {
                 layout->scroll_by(-delta * font->line_height() * 3);
                 break;
             }
+
+            case SDL_MOUSEBUTTONDOWN:
+                if (event.button.button == SDL_BUTTON_LEFT) {
+                    auto geo = renderer->scrollbar_geometry(*layout, window->height());
+                    if (geo.visible) {
+                        int mx = event.button.x;
+                        int my = event.button.y;
+                        int bar_width = 6;
+                        if (mx >= geo.track_x && mx <= geo.track_x + bar_width) {
+                            if (my >= geo.thumb_y && my < geo.thumb_y + geo.thumb_height) {
+                                // Click on thumb — start dragging
+                                scrollbar_dragging_ = true;
+                                drag_offset_ = my - geo.thumb_y;
+                            } else {
+                                // Click on track — jump to position
+                                int track_range = geo.track_height - geo.thumb_height;
+                                if (track_range > 0) {
+                                    int thumb_top = my - geo.thumb_height / 2;
+                                    thumb_top = std::max(0, std::min(thumb_top, track_range));
+                                    float ratio = static_cast<float>(thumb_top) / static_cast<float>(track_range);
+                                    int max_scroll = layout->total_height() - window->height();
+                                    layout->set_scroll_y(static_cast<int>(ratio * max_scroll));
+                                }
+                            }
+                        }
+                    }
+                }
+                break;
+
+            case SDL_MOUSEBUTTONUP:
+                if (event.button.button == SDL_BUTTON_LEFT) {
+                    scrollbar_dragging_ = false;
+                }
+                break;
+
+            case SDL_MOUSEMOTION:
+                if (scrollbar_dragging_) {
+                    auto geo = renderer->scrollbar_geometry(*layout, window->height());
+                    int track_range = geo.track_height - geo.thumb_height;
+                    if (track_range > 0) {
+                        int thumb_top = event.motion.y - drag_offset_;
+                        thumb_top = std::max(0, std::min(thumb_top, track_range));
+                        float ratio = static_cast<float>(thumb_top) / static_cast<float>(track_range);
+                        int max_scroll = layout->total_height() - window->height();
+                        layout->set_scroll_y(static_cast<int>(ratio * max_scroll));
+                    }
+                }
+                break;
 
             case SDL_KEYDOWN:
                 handle_key(event.key.keysym);

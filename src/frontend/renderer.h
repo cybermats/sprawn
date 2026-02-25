@@ -8,6 +8,14 @@
 
 namespace sprawn::detail {
 
+struct ScrollbarGeometry {
+    bool visible;       // false if content fits in viewport
+    int track_x;        // left edge of the clickable track area
+    int track_height;   // = viewport_height
+    int thumb_y;        // top edge of thumb
+    int thumb_height;   // height of thumb
+};
+
 class Renderer {
 public:
     Renderer(SDL_Renderer* sdl_renderer, GlyphCache& cache, const Font& font);
@@ -19,6 +27,8 @@ public:
 
     // Background color (default: dark).
     void set_bg_color(uint8_t r, uint8_t g, uint8_t b);
+
+    ScrollbarGeometry scrollbar_geometry(const TextLayout& layout, int viewport_height) const;
 
 private:
     void draw_run(const ShapedRun& run, int x, int y);

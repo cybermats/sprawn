@@ -63,22 +63,37 @@ void Renderer::draw_run(const ShapedRun& run, int x, int y) {
     }
 }
 
-void Renderer::draw_scrollbar(const TextLayout& layout, int viewport_height) {
+ScrollbarGeometry Renderer::scrollbar_geometry(const TextLayout& layout, int viewport_height) const {
+    ScrollbarGeometry geo{};
     int total = layout.total_height();
-    if (total <= viewport_height || viewport_height <= 0) return;
+    if (total <= viewport_height || viewport_height <= 0) {
+        geo.visible = false;
+        return geo;
+    }
 
+    geo.visible = true;
     int bar_width = 6;
     float ratio = static_cast<float>(viewport_height) / static_cast<float>(total);
-    int bar_height = std::max(20, static_cast<int>(ratio * viewport_height));
+    geo.thumb_height = std::max(20, static_cast<int>(ratio * viewport_height));
     float scroll_ratio = static_cast<float>(layout.scroll_y()) /
                          static_cast<float>(total - viewport_height);
-    int bar_y = static_cast<int>(scroll_ratio * (viewport_height - bar_height));
+    geo.thumb_y = static_cast<int>(scroll_ratio * (viewport_height - geo.thumb_height));
+    geo.track_height = viewport_height;
 
     int window_w = 0;
     SDL_GetRendererOutputSize(renderer_, &window_w, nullptr);
+    geo.track_x = window_w - bar_width - 2;
 
+    return geo;
+}
+
+void Renderer::draw_scrollbar(const TextLayout& layout, int viewport_height) {
+    ScrollbarGeometry geo = scrollbar_geometry(layout, viewport_height);
+    if (!geo.visible) return;
+
+    int bar_width = 6;
     SDL_SetRenderDrawColor(renderer_, 0x80, 0x80, 0x80, 0xA0);
-    SDL_Rect bar_rect = {window_w - bar_width - 2, bar_y, bar_width, bar_height};
+    SDL_Rect bar_rect = {geo.track_x, geo.thumb_y, bar_width, geo.thumb_height};
     SDL_RenderFillRect(renderer_, &bar_rect);
 }
 
