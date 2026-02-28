@@ -3,6 +3,8 @@ add_library(sprawn_backend STATIC
     file_source.cpp
     lorem_ipsum_source.cpp
     string_array_document.cpp
+    piece_table.cpp
+    piece_table_document.cpp
 )
 
 target_include_directories(sprawn_backend

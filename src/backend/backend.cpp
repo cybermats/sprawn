@@ -2,8 +2,11 @@
 
 #include "file_source.h"
 #include "lorem_ipsum_source.h"
-#include "string_array_document.h"
+#include "piece_table.h"
+#include "piece_table_document.h"
 
+#include <algorithm>
+#include <memory>
 #include <vector>
 
 namespace sprawn {
@@ -11,34 +14,28 @@ namespace sprawn {
 struct Backend::Impl {
     BackendConfig config;
     std::unique_ptr<Source> source;
-    std::unique_ptr<detail::StringArrayDocument> document;
+    std::unique_ptr<detail::PieceTableDocument> document;
     SourceInfo cached_info;
 
     void load() {
-        document = std::make_unique<detail::StringArrayDocument>();
         cached_info = source->info();
 
+        // Read entire source into one contiguous string.
+        std::string content;
         constexpr std::size_t BUF_SIZE = 64 * 1024;
         std::vector<char> buf(BUF_SIZE);
-        std::string partial_line;
 
         while (!source->at_end()) {
             std::size_t n = source->read(buf.data(), BUF_SIZE);
-            for (std::size_t i = 0; i < n; ++i) {
-                if (buf[i] == '\n') {
-                    document->add_line(std::move(partial_line));
-                    partial_line.clear();
-                } else if (buf[i] != '\r') {
-                    partial_line += buf[i];
-                }
-            }
+            content.append(buf.data(), n);
         }
 
-        // Add any remaining content as the last line.
-        if (!partial_line.empty()) {
-            document->add_line(std::move(partial_line));
-        }
+        // Strip \r in-place.
+        content.erase(std::remove(content.begin(), content.end(), '\r'),
+                      content.end());
 
+        auto table = std::make_shared<detail::PieceTable>(std::move(content));
+        document = std::make_unique<detail::PieceTableDocument>(std::move(table));
         document->mark_fully_loaded();
     }
 };
