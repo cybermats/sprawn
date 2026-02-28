@@ -233,12 +233,7 @@ void Frontend::set_text(std::string_view utf8_text) {
 }
 
 void Frontend::set_document(const Document& doc) {
-    std::string text;
-    for (std::size_t i = 0; i < doc.line_count(); ++i) {
-        if (i > 0) text += '\n';
-        text += doc.line(i);
-    }
-    set_text(text);
+    impl_->layout->set_document(&doc);
 }
 
 void Frontend::scroll_to_line(std::size_t line) {

@@ -5,6 +5,8 @@ add_library(sprawn_backend STATIC
     string_array_document.cpp
     piece_table.cpp
     piece_table_document.cpp
+    mapped_file.cpp
+    mmap_document.cpp
 )
 
 target_include_directories(sprawn_backend

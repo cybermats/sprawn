@@ -2,6 +2,8 @@
 
 #include "file_source.h"
 #include "lorem_ipsum_source.h"
+#include "mapped_file.h"
+#include "mmap_document.h"
 #include "piece_table.h"
 #include "piece_table_document.h"
 
@@ -14,10 +16,10 @@ namespace sprawn {
 struct Backend::Impl {
     BackendConfig config;
     std::unique_ptr<Source> source;
-    std::unique_ptr<detail::PieceTableDocument> document;
+    std::unique_ptr<Document> document;
     SourceInfo cached_info;
 
-    void load() {
+    void load_from_source() {
         cached_info = source->info();
 
         // Read entire source into one contiguous string.
@@ -35,8 +37,9 @@ struct Backend::Impl {
                       content.end());
 
         auto table = std::make_shared<detail::PieceTable>(std::move(content));
-        document = std::make_unique<detail::PieceTableDocument>(std::move(table));
-        document->mark_fully_loaded();
+        auto doc = std::make_unique<detail::PieceTableDocument>(std::move(table));
+        doc->mark_fully_loaded();
+        document = std::move(doc);
     }
 };
 
@@ -51,7 +54,10 @@ Backend::Backend(Backend&&) noexcept = default;
 Backend& Backend::operator=(Backend&&) noexcept = default;
 
 void Backend::open_file(const std::string& path) {
-    load_from(std::make_unique<detail::FileSource>(path));
+    auto mapped = std::make_unique<detail::MappedFile>(path);
+    impl_->cached_info = SourceInfo{path, mapped->size(), true};
+    impl_->document = std::make_unique<detail::MmapDocument>(std::move(mapped));
+    impl_->source.reset();
 }
 
 void Backend::open_lorem_ipsum(std::size_t num_lines) {
@@ -60,7 +66,7 @@ void Backend::open_lorem_ipsum(std::size_t num_lines) {
 
 void Backend::load_from(std::unique_ptr<Source> source) {
     impl_->source = std::move(source);
-    impl_->load();
+    impl_->load_from_source();
 }
 
 const Document* Backend::document() const {
@@ -68,7 +74,7 @@ const Document* Backend::document() const {
 }
 
 SourceInfo Backend::source_info() const {
-    return impl_->source ? impl_->cached_info : SourceInfo{};
+    return impl_->cached_info;
 }
 
 } // namespace sprawn

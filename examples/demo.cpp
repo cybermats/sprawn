@@ -59,22 +59,19 @@ int main(int argc, char* argv[]) {
     config.font_size = 16;
 
     sprawn::Frontend frontend(config);
+    sprawn::Backend backend;
 
     if (argc > 2 && std::string(argv[1]) == "--lorem") {
         std::size_t num_lines = std::stoul(argv[2]);
-        sprawn::Backend backend;
         backend.open_lorem_ipsum(num_lines);
 
-        config.title = "Sprawn - lorem ipsum (" + std::string(argv[2]) + " lines)";
         const auto* doc = backend.document();
         if (doc) {
             frontend.set_document(*doc);
         }
     } else if (argc > 1) {
-        sprawn::Backend backend;
         backend.open_file(argv[1]);
 
-        config.title = std::string("Sprawn - ") + argv[1];
         const auto* doc = backend.document();
         if (doc) {
             frontend.set_document(*doc);
