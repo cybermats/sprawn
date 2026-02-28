@@ -1,2 +1,0 @@
-add_executable(sprawn_demo demo.cpp)
-target_link_libraries(sprawn_demo PRIVATE sprawn_frontend sprawn_backend)
