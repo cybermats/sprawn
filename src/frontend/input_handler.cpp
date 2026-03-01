@@ -12,10 +12,10 @@ std::optional<EditorCommand> InputHandler::translate(const SDL_Event& ev) const 
         const auto& k = ev.key.keysym;
         const bool ctrl  = (k.mod & KMOD_CTRL)  != 0;
         const bool shift = (k.mod & KMOD_SHIFT) != 0;
-        (void)shift;
 
         if (ctrl) {
             switch (k.sym) {
+            case SDLK_a: return SelectAll{};
             case SDLK_c: return Copy{};
             case SDLK_v: return Paste{};
             case SDLK_x: return Cut{};
@@ -25,14 +25,14 @@ std::optional<EditorCommand> InputHandler::translate(const SDL_Event& ev) const 
         }
 
         switch (k.sym) {
-        case SDLK_LEFT:      return MoveCursor{-1,  0};
-        case SDLK_RIGHT:     return MoveCursor{ 1,  0};
-        case SDLK_UP:        return MoveCursor{ 0, -1};
-        case SDLK_DOWN:      return MoveCursor{ 0,  1};
-        case SDLK_HOME:      return MoveHome{};
-        case SDLK_END:       return MoveEnd{};
-        case SDLK_PAGEUP:    return MovePgUp{};
-        case SDLK_PAGEDOWN:  return MovePgDn{};
+        case SDLK_LEFT:      return MoveCursor{-1,  0, shift};
+        case SDLK_RIGHT:     return MoveCursor{ 1,  0, shift};
+        case SDLK_UP:        return MoveCursor{ 0, -1, shift};
+        case SDLK_DOWN:      return MoveCursor{ 0,  1, shift};
+        case SDLK_HOME:      return MoveHome{shift};
+        case SDLK_END:       return MoveEnd{shift};
+        case SDLK_PAGEUP:    return MovePgUp{shift};
+        case SDLK_PAGEDOWN:  return MovePgDn{shift};
         case SDLK_BACKSPACE: return DeleteBackward{};
         case SDLK_DELETE:    return DeleteForward{};
         case SDLK_RETURN:    [[fallthrough]];
@@ -43,8 +43,16 @@ std::optional<EditorCommand> InputHandler::translate(const SDL_Event& ev) const 
     }
 
     case SDL_MOUSEBUTTONDOWN:
-        if (ev.button.button == SDL_BUTTON_LEFT)
-            return ClickPosition{ev.button.x, ev.button.y};
+        if (ev.button.button == SDL_BUTTON_LEFT) {
+            bool shift = (SDL_GetModState() & KMOD_SHIFT) != 0;
+            return ClickPosition{ev.button.x, ev.button.y, shift};
+        }
+        break;
+
+    case SDL_MOUSEMOTION:
+        // Drag-to-select: extend selection while left button held
+        if (ev.motion.state & SDL_BUTTON_LMASK)
+            return ClickPosition{ev.motion.x, ev.motion.y, true};
         break;
 
     case SDL_MOUSEWHEEL: {

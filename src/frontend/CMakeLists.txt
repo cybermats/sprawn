@@ -1,5 +1,6 @@
 find_package(SDL2 REQUIRED)
 find_package(Freetype REQUIRED)
+find_package(ICU REQUIRED COMPONENTS uc i18n)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(HARFBUZZ REQUIRED harfbuzz)
 
@@ -7,6 +8,7 @@ add_library(sprawn_frontend
     window.cpp
     renderer.cpp
     font_face.cpp
+    font_chain.cpp
     glyph_atlas.cpp
     text_layout.cpp
     line_cache.cpp
@@ -41,6 +43,8 @@ target_link_libraries(sprawn_frontend
         ${_SDL2_LIB}
         Freetype::Freetype
         ${HARFBUZZ_LIBRARIES}
+        ICU::uc
+        ICU::i18n
 )
 
 target_compile_features(sprawn_frontend PUBLIC cxx_std_20)

@@ -14,17 +14,23 @@
 namespace sprawn {
 
 class GlyphAtlas;
-class FontFace;
+class FontChain;
 
 struct CursorPos {
     size_t line{0};
     size_t col{0};
 };
 
+struct SelectAnchor {
+    size_t line{0};
+    size_t col{0};
+    bool   active{false};
+};
+
 class Editor {
 public:
     Editor(Document& doc, Renderer& renderer,
-           FontFace& font, GlyphAtlas& atlas,
+           FontChain& fonts, GlyphAtlas& atlas,
            int width_px, int height_px);
 
     void handle_event(const SDL_Event& ev);
@@ -33,8 +39,13 @@ public:
 
 private:
     void apply_command(const EditorCommand& cmd);
-    void render_gutter(size_t line, int y);
-    void render_cursor(int y, const GlyphRun& run);
+    void render_cursor(int y, const GlyphRun& run, std::string_view utf8);
+
+    // Selection helpers
+    bool has_selection() const;
+    std::pair<CursorPos, CursorPos> selection_range() const;
+    std::string selected_text() const;
+    void delete_selection();
 
     Document&     doc_;
     Renderer&     renderer_;
@@ -44,6 +55,7 @@ private:
     LineCache     line_cache_;
     InputHandler  input_;
     CursorPos     cursor_;
+    SelectAnchor  anchor_;
     int           gutter_width_{0};
 
     static constexpr int kGutterPad  = 8;

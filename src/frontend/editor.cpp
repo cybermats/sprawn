@@ -1,6 +1,6 @@
 #include <sprawn/frontend/editor.h>
+#include "font_chain.h"
 #include "glyph_atlas.h"
-#include "font_face.h"
 
 #include <SDL2/SDL.h>
 #include <algorithm>
@@ -22,6 +22,33 @@ uint64_t fnv1a(std::string_view s) {
     return h;
 }
 
+// Count UTF-8 characters (codepoints) in s.
+size_t utf8_char_count(std::string_view s) {
+    size_t n = 0;
+    for (size_t i = 0; i < s.size(); ) {
+        unsigned char b = static_cast<unsigned char>(s[i]);
+        if      (b < 0x80) i += 1;
+        else if (b < 0xE0) i += 2;
+        else if (b < 0xF0) i += 3;
+        else               i += 4;
+        ++n;
+    }
+    return n;
+}
+
+// Byte offset of the char_idx-th UTF-8 codepoint in s.
+size_t utf8_byte_offset(std::string_view s, size_t char_idx) {
+    size_t i = 0;
+    for (size_t n = 0; n < char_idx && i < s.size(); ++n) {
+        unsigned char b = static_cast<unsigned char>(s[i]);
+        if      (b < 0x80) i += 1;
+        else if (b < 0xE0) i += 2;
+        else if (b < 0xF0) i += 3;
+        else               i += 4;
+    }
+    return i;
+}
+
 // Format a line number into a fixed-width right-aligned string.
 std::string format_line_number(size_t n, int width) {
     char buf[32];
@@ -31,14 +58,18 @@ std::string format_line_number(size_t n, int width) {
 
 } // namespace
 
+// ---------------------------------------------------------------------------
+// Construction
+// ---------------------------------------------------------------------------
+
 Editor::Editor(Document& doc, Renderer& renderer,
-               FontFace& font, GlyphAtlas& atlas,
+               FontChain& fonts, GlyphAtlas& atlas,
                int width_px, int height_px)
     : doc_(doc),
       renderer_(renderer),
       atlas_(atlas),
-      layout_(atlas, font.line_height(), font.ascent()),
-      viewport_(width_px, height_px, font.line_height()),
+      layout_(atlas, fonts),
+      viewport_(width_px, height_px, fonts.line_height()),
       line_cache_(512)
 {
     // Pre-compute gutter width based on digit count of longest line number
@@ -47,11 +78,14 @@ Editor::Editor(Document& doc, Renderer& renderer,
     for (size_t n = lc > 0 ? lc - 1 : 0; n >= 10; n /= 10) ++digits;
 
     // Each digit is advance_width wide; add padding on both sides
-    gutter_width_ = digits * font.advance_width() + kGutterPad * 2;
+    gutter_width_ = digits * fonts.advance_width() + kGutterPad * 2;
 }
 
+// ---------------------------------------------------------------------------
+// Event handling
+// ---------------------------------------------------------------------------
+
 void Editor::handle_event(const SDL_Event& ev) {
-    // Window resize
     if (ev.type == SDL_WINDOWEVENT &&
         ev.window.event == SDL_WINDOWEVENT_RESIZED)
     {
@@ -67,15 +101,101 @@ void Editor::on_resize(int w, int h) {
     viewport_.resize(w, h);
 }
 
+// ---------------------------------------------------------------------------
+// Selection helpers
+// ---------------------------------------------------------------------------
+
+bool Editor::has_selection() const {
+    return anchor_.active &&
+           (anchor_.line != cursor_.line || anchor_.col != cursor_.col);
+}
+
+std::pair<CursorPos, CursorPos> Editor::selection_range() const {
+    CursorPos a{anchor_.line, anchor_.col};
+    CursorPos c = cursor_;
+    // Normalize so that start comes before end
+    if (a.line < c.line || (a.line == c.line && a.col <= c.col))
+        return {a, c};
+    return {c, a};
+}
+
+std::string Editor::selected_text() const {
+    if (!has_selection()) return {};
+    auto [start, end] = selection_range();
+
+    if (start.line == end.line) {
+        std::string s = doc_.line(start.line);
+        size_t b0 = utf8_byte_offset(s, start.col);
+        size_t b1 = utf8_byte_offset(s, end.col);
+        return s.substr(b0, b1 - b0);
+    }
+
+    std::string result;
+    // First partial line
+    std::string first_s = doc_.line(start.line);
+    result += first_s.substr(utf8_byte_offset(first_s, start.col));
+    result += '\n';
+    // Middle lines
+    for (size_t L = start.line + 1; L < end.line; ++L) {
+        result += doc_.line(L);
+        result += '\n';
+    }
+    // Last partial line
+    std::string last_s = doc_.line(end.line);
+    result += last_s.substr(0, utf8_byte_offset(last_s, end.col));
+    return result;
+}
+
+void Editor::delete_selection() {
+    if (!has_selection()) return;
+    auto [start, end] = selection_range();
+
+    size_t removed_lines = end.line - start.line;
+
+    if (removed_lines == 0) {
+        doc_.erase(start.line, start.col, end.col - start.col);
+        line_cache_.invalidate(start.line);
+    } else {
+        // Count total characters to erase (including newlines)
+        size_t count = utf8_char_count(doc_.line(start.line)) - start.col + 1;
+        for (size_t L = start.line + 1; L < end.line; ++L)
+            count += utf8_char_count(doc_.line(L)) + 1;
+        count += end.col;
+
+        doc_.erase(start.line, start.col, count);
+        line_cache_.invalidate(start.line);
+        line_cache_.invalidate_range(start.line + 1, removed_lines,
+                                     -static_cast<int>(removed_lines));
+    }
+
+    cursor_ = start;
+    anchor_.active = false;
+    viewport_.ensure_line_visible(cursor_.line, doc_.line_count());
+}
+
+// ---------------------------------------------------------------------------
+// Command dispatch
+// ---------------------------------------------------------------------------
+
 void Editor::apply_command(const EditorCommand& cmd) {
     std::visit([this](const auto& c) {
         using T = std::decay_t<decltype(c)>;
 
+        // Helper: activate or clear selection anchor based on shift key
+        auto handle_shift = [this](bool shift) {
+            if (shift) {
+                if (!anchor_.active)
+                    anchor_ = {cursor_.line, cursor_.col, true};
+            } else {
+                anchor_.active = false;
+            }
+        };
+
         if constexpr (std::is_same_v<T, MoveCursor>) {
+            handle_shift(c.shift);
             size_t total = doc_.line_count();
             if (total == 0) return;
 
-            // Vertical
             if (c.dy != 0) {
                 long long new_line = static_cast<long long>(cursor_.line) + c.dy;
                 if (new_line < 0) new_line = 0;
@@ -84,19 +204,8 @@ void Editor::apply_command(const EditorCommand& cmd) {
                 cursor_.line = static_cast<size_t>(new_line);
             }
 
-            // Horizontal
             if (c.dx != 0) {
-                std::string line_str = doc_.line(cursor_.line);
-                // Count UTF-8 characters (simplified)
-                size_t char_count = 0;
-                for (size_t i = 0; i < line_str.size(); ) {
-                    unsigned char byte = static_cast<unsigned char>(line_str[i]);
-                    if (byte < 0x80) i += 1;
-                    else if (byte < 0xE0) i += 2;
-                    else if (byte < 0xF0) i += 3;
-                    else i += 4;
-                    ++char_count;
-                }
+                size_t char_count = utf8_char_count(doc_.line(cursor_.line));
                 long long new_col = static_cast<long long>(cursor_.col) + c.dx;
                 if (new_col < 0) new_col = 0;
                 if (static_cast<size_t>(new_col) > char_count)
@@ -107,28 +216,21 @@ void Editor::apply_command(const EditorCommand& cmd) {
             viewport_.ensure_line_visible(cursor_.line, doc_.line_count());
 
         } else if constexpr (std::is_same_v<T, MoveHome>) {
+            handle_shift(c.shift);
             cursor_.col = 0;
 
         } else if constexpr (std::is_same_v<T, MoveEnd>) {
-            std::string s = doc_.line(cursor_.line);
-            // Count characters
-            size_t n = 0;
-            for (size_t i = 0; i < s.size(); ) {
-                unsigned char b = static_cast<unsigned char>(s[i]);
-                if (b < 0x80) i += 1;
-                else if (b < 0xE0) i += 2;
-                else if (b < 0xF0) i += 3;
-                else i += 4;
-                ++n;
-            }
-            cursor_.col = n;
+            handle_shift(c.shift);
+            cursor_.col = utf8_char_count(doc_.line(cursor_.line));
 
         } else if constexpr (std::is_same_v<T, MovePgUp>) {
+            handle_shift(c.shift);
             size_t vl = viewport_.visible_lines();
             cursor_.line = cursor_.line > vl ? cursor_.line - vl : 0;
             viewport_.ensure_line_visible(cursor_.line, doc_.line_count());
 
         } else if constexpr (std::is_same_v<T, MovePgDn>) {
+            handle_shift(c.shift);
             size_t vl    = viewport_.visible_lines();
             size_t total = doc_.line_count();
             cursor_.line = std::min(cursor_.line + vl, total > 0 ? total - 1 : 0);
@@ -138,63 +240,54 @@ void Editor::apply_command(const EditorCommand& cmd) {
             viewport_.scroll_by(0.0f, c.dy, doc_.line_count());
 
         } else if constexpr (std::is_same_v<T, ClickPosition>) {
-            // Determine line from y
+            // Determine clicked line
             size_t clicked_line = viewport_.y_to_line(c.y_px);
             size_t total = doc_.line_count();
             if (total > 0 && clicked_line >= total)
                 clicked_line = total - 1;
-            cursor_.line = clicked_line;
 
-            // Determine column from x (subtract gutter)
+            // Determine column from x
             int text_x = c.x_px - gutter_width_ + viewport_.scroll_x_px();
             if (text_x < 0) text_x = 0;
 
-            std::string utf8 = doc_.line(cursor_.line);
-            uint64_t    h    = fnv1a(utf8);
-            const GlyphRun* cached = line_cache_.get(cursor_.line, h);
+            std::string utf8 = doc_.line(clicked_line);
+            uint64_t h = fnv1a(utf8);
+            const GlyphRun* cached = line_cache_.get(clicked_line, h);
+            size_t col;
             if (cached) {
-                cursor_.col = layout_.column_for_x(*cached, text_x);
+                col = layout_.column_for_x(*cached, utf8, text_x);
             } else {
                 GlyphRun run = layout_.shape_line(utf8);
-                cursor_.col  = layout_.column_for_x(run, text_x);
-                line_cache_.put(cursor_.line, h, std::move(run));
+                col = layout_.column_for_x(run, utf8, text_x);
+                line_cache_.put(clicked_line, h, std::move(run));
             }
 
-        } else if constexpr (std::is_same_v<T, InsertText>) {
-            doc_.insert(cursor_.line, cursor_.col, c.text);
-            // Advance cursor by the number of characters inserted
-            size_t n = 0;
-            for (size_t i = 0; i < c.text.size(); ) {
-                unsigned char b = static_cast<unsigned char>(c.text[i]);
-                if (b < 0x80) i += 1;
-                else if (b < 0xE0) i += 2;
-                else if (b < 0xF0) i += 3;
-                else i += 4;
-                ++n;
+            if (c.shift) {
+                if (!anchor_.active)
+                    anchor_ = {cursor_.line, cursor_.col, true};
+            } else {
+                anchor_.active = false;
             }
-            cursor_.col += n;
+            cursor_.line = clicked_line;
+            cursor_.col  = col;
+
+        } else if constexpr (std::is_same_v<T, InsertText>) {
+            if (has_selection()) delete_selection();
+            doc_.insert(cursor_.line, cursor_.col, c.text);
+            cursor_.col += utf8_char_count(c.text);
             line_cache_.invalidate(cursor_.line);
 
         } else if constexpr (std::is_same_v<T, DeleteBackward>) {
+            if (has_selection()) {
+                delete_selection();
+                return;
+            }
             if (cursor_.col > 0) {
                 doc_.erase(cursor_.line, cursor_.col - 1, 1);
                 --cursor_.col;
                 line_cache_.invalidate(cursor_.line);
             } else if (cursor_.line > 0) {
-                // Join with previous line
-                size_t prev_len = 0;
-                {
-                    std::string prev = doc_.line(cursor_.line - 1);
-                    for (size_t i = 0; i < prev.size(); ) {
-                        unsigned char b = static_cast<unsigned char>(prev[i]);
-                        if (b < 0x80) i += 1;
-                        else if (b < 0xE0) i += 2;
-                        else if (b < 0xF0) i += 3;
-                        else i += 4;
-                        ++prev_len;
-                    }
-                }
-                // Erase the newline at end of previous line
+                size_t prev_len = utf8_char_count(doc_.line(cursor_.line - 1));
                 doc_.erase(cursor_.line - 1, prev_len, 1);
                 line_cache_.invalidate_range(cursor_.line - 1, 1, -1);
                 --cursor_.line;
@@ -203,26 +296,22 @@ void Editor::apply_command(const EditorCommand& cmd) {
             }
 
         } else if constexpr (std::is_same_v<T, DeleteForward>) {
-            std::string s = doc_.line(cursor_.line);
-            size_t char_count = 0;
-            for (size_t i = 0; i < s.size(); ) {
-                unsigned char b = static_cast<unsigned char>(s[i]);
-                if (b < 0x80) i += 1;
-                else if (b < 0xE0) i += 2;
-                else if (b < 0xF0) i += 3;
-                else i += 4;
-                ++char_count;
+            if (has_selection()) {
+                delete_selection();
+                return;
             }
+            size_t char_count = utf8_char_count(doc_.line(cursor_.line));
             if (cursor_.col < char_count) {
                 doc_.erase(cursor_.line, cursor_.col, 1);
                 line_cache_.invalidate(cursor_.line);
             } else {
-                // Merge with next line (delete newline)
+                // Merge with next line (delete the newline)
                 doc_.erase(cursor_.line, cursor_.col, 1);
                 line_cache_.invalidate_range(cursor_.line, 1, -1);
             }
 
         } else if constexpr (std::is_same_v<T, NewLine>) {
+            if (has_selection()) delete_selection();
             doc_.insert(cursor_.line, cursor_.col, "\n");
             line_cache_.invalidate_range(cursor_.line, 0, 1);
             line_cache_.invalidate(cursor_.line + 1);
@@ -231,35 +320,63 @@ void Editor::apply_command(const EditorCommand& cmd) {
             viewport_.ensure_line_visible(cursor_.line, doc_.line_count());
 
         } else if constexpr (std::is_same_v<T, Copy>) {
-            std::string s = doc_.line(cursor_.line);
-            SDL_SetClipboardText(s.c_str());
+            std::string text = has_selection() ? selected_text()
+                                               : doc_.line(cursor_.line);
+            SDL_SetClipboardText(text.c_str());
 
         } else if constexpr (std::is_same_v<T, Cut>) {
-            std::string s = doc_.line(cursor_.line);
-            SDL_SetClipboardText(s.c_str());
-            // Erase entire line content
-            size_t char_count = 0;
-            for (size_t i = 0; i < s.size(); ) {
-                unsigned char b = static_cast<unsigned char>(s[i]);
-                if (b < 0x80) i += 1;
-                else if (b < 0xE0) i += 2;
-                else if (b < 0xF0) i += 3;
-                else i += 4;
-                ++char_count;
-            }
-            if (char_count > 0) {
-                doc_.erase(cursor_.line, 0, char_count);
-                cursor_.col = 0;
-                line_cache_.invalidate(cursor_.line);
+            if (has_selection()) {
+                std::string text = selected_text();
+                SDL_SetClipboardText(text.c_str());
+                delete_selection();
+            } else {
+                // Cut entire line content
+                std::string s = doc_.line(cursor_.line);
+                SDL_SetClipboardText(s.c_str());
+                size_t char_count = utf8_char_count(s);
+                if (char_count > 0) {
+                    doc_.erase(cursor_.line, 0, char_count);
+                    cursor_.col = 0;
+                    line_cache_.invalidate(cursor_.line);
+                }
             }
 
         } else if constexpr (std::is_same_v<T, Paste>) {
-            char* text = SDL_GetClipboardText();
-            if (text) {
+            if (has_selection()) delete_selection();
+            char* clipboard = SDL_GetClipboardText();
+            if (clipboard) {
+                std::string text(clipboard);
+                SDL_free(clipboard);
                 doc_.insert(cursor_.line, cursor_.col, text);
-                SDL_free(text);
-                line_cache_.invalidate(cursor_.line);
+
+                // Update cursor past the inserted text
+                size_t newlines = 0;
+                size_t last_nl  = 0;
+                for (size_t i = 0; i < text.size(); ++i) {
+                    if (text[i] == '\n') { ++newlines; last_nl = i; }
+                }
+                if (newlines == 0) {
+                    cursor_.col += utf8_char_count(text);
+                    line_cache_.invalidate(cursor_.line);
+                } else {
+                    size_t chars_after = utf8_char_count(
+                        std::string_view(text).substr(last_nl + 1));
+                    line_cache_.invalidate_range(cursor_.line, 0,
+                                                  static_cast<int>(newlines));
+                    line_cache_.invalidate(cursor_.line);
+                    cursor_.line += newlines;
+                    cursor_.col   = chars_after;
+                    line_cache_.invalidate(cursor_.line);
+                }
+                viewport_.ensure_line_visible(cursor_.line, doc_.line_count());
             }
+
+        } else if constexpr (std::is_same_v<T, SelectAll>) {
+            size_t total = doc_.line_count();
+            if (total == 0) return;
+            anchor_ = {0, 0, true};
+            cursor_.line = total - 1;
+            cursor_.col  = utf8_char_count(doc_.line(cursor_.line));
 
         } else if constexpr (std::is_same_v<T, Quit>) {
             SDL_Event quit{};
@@ -270,8 +387,11 @@ void Editor::apply_command(const EditorCommand& cmd) {
     }, cmd);
 }
 
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+
 void Editor::render() {
-    // Background
     renderer_.begin_frame(Color{30, 30, 30, 255});
 
     size_t total = doc_.line_count();
@@ -280,20 +400,28 @@ void Editor::render() {
         return;
     }
 
-    int lh = layout_.line_height();
+    int lh     = layout_.line_height();
     size_t first = viewport_.first_line();
     size_t last  = viewport_.last_line(total);
 
+    // Pre-compute selection range (avoid repeated calls inside the loop)
+    bool     sel = has_selection();
+    CursorPos sel_start{}, sel_end{};
+    if (sel) {
+        auto [s, e] = selection_range();
+        sel_start = s;
+        sel_end   = e;
+    }
+
     // Text clip region (exclude gutter)
-    SDL_Rect text_clip{gutter_width_, 0,
-                       // We don't know window width here; use a large number
-                       32767, 32767};
+    SDL_Rect text_clip{gutter_width_, 0, 32767, 32767};
     renderer_.set_clip(text_clip);
 
     for (size_t L = first; L < last; ++L) {
-        int y = viewport_.line_to_y(L);
+        int y      = viewport_.line_to_y(L);
+        int text_x = gutter_width_ - viewport_.scroll_x_px();
 
-        // Fetch and shape the line
+        // Shape the line (from cache or fresh)
         std::string utf8 = doc_.line(L);
         uint64_t    h    = fnv1a(utf8);
         const GlyphRun* run_ptr = line_cache_.get(L, h);
@@ -302,35 +430,53 @@ void Editor::render() {
             tmp_run = layout_.shape_line(utf8);
             line_cache_.put(L, h, tmp_run);
             run_ptr = line_cache_.get(L, h);
-            if (!run_ptr) {
-                // Cache refused (full with nullptr) — use tmp_run directly
-                run_ptr = &tmp_run;
+            if (!run_ptr) run_ptr = &tmp_run;
+        }
+
+        // Draw selection highlight (before text so text renders on top)
+        if (sel && L >= sel_start.line && L <= sel_end.line) {
+            int x0, x1;
+            int win_w = viewport_.width_px();
+
+            if (sel_start.line == sel_end.line) {
+                x0 = text_x + layout_.x_for_column(*run_ptr, utf8, sel_start.col);
+                x1 = text_x + layout_.x_for_column(*run_ptr, utf8, sel_end.col);
+            } else if (L == sel_start.line) {
+                x0 = text_x + layout_.x_for_column(*run_ptr, utf8, sel_start.col);
+                x1 = win_w;
+            } else if (L == sel_end.line) {
+                x0 = gutter_width_;
+                x1 = text_x + layout_.x_for_column(*run_ptr, utf8, sel_end.col);
+            } else {
+                x0 = gutter_width_;
+                x1 = win_w;
             }
+
+            if (x1 > x0)
+                renderer_.fill_rect(Rect{x0, y, x1 - x0, lh},
+                                    Color{65, 120, 200, 160});
         }
 
         // Draw text
-        int text_x = gutter_width_ - viewport_.scroll_x_px();
         layout_.draw_run(renderer_, *run_ptr, text_x, y, Color{220, 220, 220, 255});
 
         // Draw cursor if on this line
         if (L == cursor_.line)
-            render_cursor(y, *run_ptr);
+            render_cursor(y, *run_ptr, utf8);
     }
 
     renderer_.clear_clip();
 
-    // Draw gutter (on top, not clipped)
+    // Draw gutter (unclipped, on top of text/selection)
     int digits = 1;
     for (size_t n = total > 0 ? total - 1 : 0; n >= 10; n /= 10) ++digits;
 
     for (size_t L = first; L < last; ++L) {
         int y = viewport_.line_to_y(L);
-        // Gutter background
         renderer_.fill_rect(Rect{0, y, gutter_width_, lh}, Color{40, 40, 40, 255});
 
         std::string num_str = format_line_number(L, digits);
         GlyphRun num_run = layout_.shape_line(num_str);
-        // Right-align: x = gutter_width_ - kGutterPad - total_width
         int gx = gutter_width_ - kGutterPad - num_run.total_width;
         layout_.draw_run(renderer_, num_run, gx, y, Color{100, 110, 120, 255});
     }
@@ -338,12 +484,11 @@ void Editor::render() {
     renderer_.end_frame();
 }
 
-void Editor::render_cursor(int y, const GlyphRun& run) {
+void Editor::render_cursor(int y, const GlyphRun& run, std::string_view utf8) {
     int cursor_x = gutter_width_ - viewport_.scroll_x_px()
-                 + layout_.x_for_column(run, cursor_.col);
+                 + layout_.x_for_column(run, utf8, cursor_.col);
 
     int lh = layout_.line_height();
-    // 2-pixel-wide cursor bar
     renderer_.fill_rect(Rect{cursor_x, y, 2, lh}, Color{220, 220, 220, 220});
 }
 

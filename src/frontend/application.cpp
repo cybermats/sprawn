@@ -4,7 +4,7 @@
 #include <sprawn/frontend/window.h>
 #include <sprawn/document.h>
 
-#include "font_face.h"
+#include "font_chain.h"
 #include "glyph_atlas.h"
 
 #include <cstdio>
@@ -42,9 +42,15 @@ bool run_application(std::string_view filepath) {
             return false;
         }
 
-        FontFace  font(font_path, kFontSize);
-        GlyphAtlas atlas(renderer, font);
-        Editor editor(doc, renderer, font, atlas, kInitW, kInitH);
+        FontChain fonts(font_path, kFontSize);
+
+        // Add fallback fonts for broad Unicode coverage
+        fonts.add_fallback("/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf");
+        fonts.add_fallback("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+        fonts.add_fallback("/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf");
+
+        GlyphAtlas atlas(renderer, fonts);
+        Editor editor(doc, renderer, fonts, atlas, kInitW, kInitH);
 
         bool running = true;
         while (running) {

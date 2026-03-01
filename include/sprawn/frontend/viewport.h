@@ -11,6 +11,7 @@ public:
     void resize(int width_px, int height_px);
     void set_line_height(int lh);
 
+    int    width_px()  const { return width_px_; }
     size_t first_line() const { return first_line_; }
     size_t last_line(size_t total_lines) const;
     size_t visible_lines() const;
