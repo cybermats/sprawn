@@ -26,3 +26,7 @@ add_test(NAME test_controller COMMAND test_controller)
 add_executable(test_decoration_compositor test_decoration_compositor.cpp)
 target_link_libraries(test_decoration_compositor PRIVATE sprawn_frontend doctest_with_main)
 add_test(NAME test_decoration_compositor COMMAND test_decoration_compositor)
+
+add_executable(test_syntax_highlighter test_syntax_highlighter.cpp)
+target_link_libraries(test_syntax_highlighter PRIVATE sprawn_middleware doctest_with_main)
+add_test(NAME test_syntax_highlighter COMMAND test_syntax_highlighter)

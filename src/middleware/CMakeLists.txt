@@ -1,5 +1,6 @@
 add_library(sprawn_middleware
     controller.cpp
+    syntax_highlighter.cpp
 )
 
 target_include_directories(sprawn_middleware

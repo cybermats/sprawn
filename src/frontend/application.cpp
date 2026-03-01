@@ -4,6 +4,7 @@
 #include <sprawn/frontend/window.h>
 #include <sprawn/document.h>
 #include <sprawn/middleware/controller.h>
+#include <sprawn/middleware/syntax_highlighter.h>
 
 #include "font_chain.h"
 #include "glyph_atlas.h"
@@ -26,6 +27,9 @@ bool run_application(std::string_view filepath) {
                          e.what());
             return false;
         }
+        auto highlighter = std::make_shared<SyntaxHighlighter>(controller);
+        highlighter->detect_language(std::string(filepath));
+        controller.add_decoration_source(highlighter);
     } else {
         controller.insert(0, 0, "");
     }
