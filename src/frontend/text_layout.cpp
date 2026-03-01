@@ -7,6 +7,7 @@
 #include <unicode/ustring.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <string_view>
@@ -118,12 +119,11 @@ bool shape_run(FontChain& fonts, GlyphAtlas& atlas,
             if (fallback_gid != 0) {
                 // Re-shape this single cluster with the fallback font
                 hb_buffer_t* fb_buf = hb_buffer_create();
+                int cluster_len = (i + 1 < glyph_count)
+                    ? std::abs(static_cast<int>(infos[i + 1].cluster) - cluster_byte)
+                    : std::abs(run_start + run_length - cluster_byte);
                 hb_buffer_add_utf8(fb_buf, utf8.data(), static_cast<int>(utf8.size()),
-                                   cluster_byte,
-                                   // length of this cluster: distance to next cluster or run end
-                                   (i + 1 < glyph_count)
-                                       ? static_cast<int>(infos[i + 1].cluster) - cluster_byte
-                                       : run_start + run_length - cluster_byte);
+                                   cluster_byte, cluster_len);
                 hb_buffer_set_direction(fb_buf, direction);
                 hb_buffer_guess_segment_properties(fb_buf);
                 hb_shape(fonts.font(fi).hb_font(), fb_buf, nullptr, 0);

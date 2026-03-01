@@ -1,5 +1,7 @@
 #include <sprawn/frontend/line_cache.h>
 
+#include <algorithm>
+
 namespace sprawn {
 
 LineCache::LineCache(size_t capacity) : capacity_(capacity) {}
@@ -62,8 +64,14 @@ void LineCache::invalidate_range(size_t first, size_t removed_count,
         index_.erase(k);
     }
 
-    // Renumber: update both the list node and the index map.
-    // Do it in two passes to avoid key collisions.
+    // Sort to avoid key collisions during renumbering.
+    if (line_delta > 0) {
+        std::sort(to_renumber.begin(), to_renumber.end(),
+                  [](const auto& a, const auto& b) { return a.first > b.first; });
+    } else {
+        std::sort(to_renumber.begin(), to_renumber.end());
+    }
+
     for (auto& [old_k, new_k] : to_renumber) {
         auto it = index_[old_k];
         it->line = new_k;

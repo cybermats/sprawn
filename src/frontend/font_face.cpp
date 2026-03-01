@@ -25,13 +25,10 @@ std::filesystem::path find_system_mono_font() {
     return {};
 }
 
-FontFace::FontFace(const std::filesystem::path& path, int size_px)
+FontFace::FontFace(FT_Library lib, const std::filesystem::path& path, int size_px)
     : size_px_(size_px)
 {
-    if (FT_Init_FreeType(&library_))
-        throw std::runtime_error("FreeType init failed");
-
-    if (FT_New_Face(library_, path.c_str(), 0, &face_))
+    if (FT_New_Face(lib, path.c_str(), 0, &face_))
         throw std::runtime_error("Failed to load font: " + path.string());
 
     FT_Error size_err = FT_Set_Pixel_Sizes(face_, 0, static_cast<FT_UInt>(size_px));
@@ -63,7 +60,6 @@ FontFace::FontFace(const std::filesystem::path& path, int size_px)
 FontFace::~FontFace() {
     if (hb_font_)  hb_font_destroy(hb_font_);
     if (face_)     FT_Done_Face(face_);
-    if (library_)  FT_Done_FreeType(library_);
 }
 
 GlyphBitmap FontFace::rasterize(uint32_t codepoint) {

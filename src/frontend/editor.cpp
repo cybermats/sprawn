@@ -49,6 +49,13 @@ size_t utf8_byte_offset(std::string_view s, size_t char_idx) {
     return i;
 }
 
+// Byte length of char_count codepoints starting at codepoint char_start.
+size_t utf8_byte_count(std::string_view s, size_t char_start, size_t char_count) {
+    size_t start_byte = utf8_byte_offset(s, char_start);
+    size_t end_byte = utf8_byte_offset(s, char_start + char_count);
+    return end_byte - start_byte;
+}
+
 // Format a line number into a fixed-width right-aligned string.
 std::string format_line_number(size_t n, int width) {
     char buf[32];
@@ -173,16 +180,23 @@ void Editor::delete_selection() {
     size_t removed_lines = end.line - start.line;
 
     if (removed_lines == 0) {
-        ctrl_.erase(start.line, start.col, end.col - start.col);
+        std::string line_text = ctrl_.line(start.line);
+        size_t byte_col = utf8_byte_offset(line_text, start.col);
+        size_t byte_count = utf8_byte_count(line_text, start.col, end.col - start.col);
+        ctrl_.erase(start.line, byte_col, byte_count);
         line_cache_.invalidate(start.line);
     } else {
-        // Count total characters to erase (including newlines)
-        size_t count = utf8_char_count(ctrl_.line(start.line)) - start.col + 1;
+        // Count total bytes to erase (including newlines)
+        std::string first_line = ctrl_.line(start.line);
+        size_t first_line_chars = utf8_char_count(first_line);
+        size_t clamped_col = std::min(start.col, first_line_chars);
+        size_t byte_col = utf8_byte_offset(first_line, clamped_col);
+        size_t count = first_line.size() - byte_col + 1; // rest of first line + newline
         for (size_t L = start.line + 1; L < end.line; ++L)
-            count += utf8_char_count(ctrl_.line(L)) + 1;
-        count += end.col;
+            count += ctrl_.line(L).size() + 1; // full line + newline
+        count += utf8_byte_offset(ctrl_.line(end.line), end.col);
 
-        ctrl_.erase(start.line, start.col, count);
+        ctrl_.erase(start.line, byte_col, count);
         line_cache_.invalidate(start.line);
         line_cache_.invalidate_range(start.line + 1, removed_lines,
                                      -static_cast<int>(removed_lines));
@@ -293,7 +307,9 @@ void Editor::apply_command(const EditorCommand& cmd) {
 
         } else if constexpr (std::is_same_v<T, InsertText>) {
             if (has_selection()) delete_selection();
-            ctrl_.insert(cursor_.line, cursor_.col, c.text);
+            std::string line_text = ctrl_.line(cursor_.line);
+            size_t byte_col = utf8_byte_offset(line_text, cursor_.col);
+            ctrl_.insert(cursor_.line, byte_col, c.text);
             cursor_.col += utf8_char_count(c.text);
             line_cache_.invalidate(cursor_.line);
 
@@ -303,12 +319,17 @@ void Editor::apply_command(const EditorCommand& cmd) {
                 return;
             }
             if (cursor_.col > 0) {
-                ctrl_.erase(cursor_.line, cursor_.col - 1, 1);
+                std::string line_text = ctrl_.line(cursor_.line);
+                size_t byte_col = utf8_byte_offset(line_text, cursor_.col - 1);
+                size_t byte_count = utf8_byte_count(line_text, cursor_.col - 1, 1);
+                ctrl_.erase(cursor_.line, byte_col, byte_count);
                 --cursor_.col;
                 line_cache_.invalidate(cursor_.line);
             } else if (cursor_.line > 0) {
-                size_t prev_len = utf8_char_count(ctrl_.line(cursor_.line - 1));
-                ctrl_.erase(cursor_.line - 1, prev_len, 1);
+                std::string prev_line = ctrl_.line(cursor_.line - 1);
+                size_t prev_len = utf8_char_count(prev_line);
+                size_t prev_byte_len = prev_line.size();
+                ctrl_.erase(cursor_.line - 1, prev_byte_len, 1);
                 line_cache_.invalidate_range(cursor_.line - 1, 1, -1);
                 --cursor_.line;
                 cursor_.col = prev_len;
@@ -320,19 +341,26 @@ void Editor::apply_command(const EditorCommand& cmd) {
                 delete_selection();
                 return;
             }
-            size_t char_count = utf8_char_count(ctrl_.line(cursor_.line));
+            std::string line_text_del = ctrl_.line(cursor_.line);
+            size_t char_count = utf8_char_count(line_text_del);
             if (cursor_.col < char_count) {
-                ctrl_.erase(cursor_.line, cursor_.col, 1);
+                size_t byte_col = utf8_byte_offset(line_text_del, cursor_.col);
+                size_t byte_count = utf8_byte_count(line_text_del, cursor_.col, 1);
+                ctrl_.erase(cursor_.line, byte_col, byte_count);
                 line_cache_.invalidate(cursor_.line);
             } else {
                 // Merge with next line (delete the newline)
-                ctrl_.erase(cursor_.line, cursor_.col, 1);
+                ctrl_.erase(cursor_.line, line_text_del.size(), 1);
                 line_cache_.invalidate_range(cursor_.line, 1, -1);
             }
 
         } else if constexpr (std::is_same_v<T, NewLine>) {
             if (has_selection()) delete_selection();
-            ctrl_.insert(cursor_.line, cursor_.col, "\n");
+            {
+                std::string nl_line = ctrl_.line(cursor_.line);
+                size_t byte_col = utf8_byte_offset(nl_line, cursor_.col);
+                ctrl_.insert(cursor_.line, byte_col, "\n");
+            }
             line_cache_.invalidate_range(cursor_.line, 0, 1);
             line_cache_.invalidate(cursor_.line + 1);
             ++cursor_.line;
@@ -353,9 +381,8 @@ void Editor::apply_command(const EditorCommand& cmd) {
                 // Cut entire line content
                 std::string s = ctrl_.line(cursor_.line);
                 SDL_SetClipboardText(s.c_str());
-                size_t char_count = utf8_char_count(s);
-                if (char_count > 0) {
-                    ctrl_.erase(cursor_.line, 0, char_count);
+                if (!s.empty()) {
+                    ctrl_.erase(cursor_.line, 0, s.size());
                     cursor_.col = 0;
                     line_cache_.invalidate(cursor_.line);
                 }
@@ -367,7 +394,11 @@ void Editor::apply_command(const EditorCommand& cmd) {
             if (clipboard) {
                 std::string text(clipboard);
                 SDL_free(clipboard);
-                ctrl_.insert(cursor_.line, cursor_.col, text);
+                {
+                    std::string paste_line = ctrl_.line(cursor_.line);
+                    size_t byte_col = utf8_byte_offset(paste_line, cursor_.col);
+                    ctrl_.insert(cursor_.line, byte_col, text);
+                }
 
                 // Update cursor past the inserted text
                 size_t newlines = 0;

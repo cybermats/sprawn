@@ -25,8 +25,8 @@ struct GlyphBitmap {
 
 class FontFace {
 public:
-    // Load a .ttf/.otf file at a given pixel size.
-    FontFace(const std::filesystem::path& path, int size_px);
+    // Load a .ttf/.otf file at a given pixel size using an existing FT_Library.
+    FontFace(FT_Library lib, const std::filesystem::path& path, int size_px);
     ~FontFace();
 
     FontFace(const FontFace&) = delete;
@@ -55,7 +55,6 @@ public:
     double bitmap_scale() const { return bitmap_scale_; }
 
 private:
-    FT_Library  library_{};
     FT_Face     face_{};
     hb_font_t*  hb_font_{};
     int         size_px_{};
