@@ -69,6 +69,8 @@ MappedFile::MappedFile(const std::filesystem::path& path) {
     size_ = static_cast<size_t>(st.st_size);
 
     if (size_ == 0) {
+        ::close(fd_);
+        fd_ = -1;
         return;
     }
 
@@ -79,6 +81,8 @@ MappedFile::MappedFile(const std::filesystem::path& path) {
         throw std::runtime_error("Failed to mmap file: " + path.string());
     }
     data_ = static_cast<std::byte*>(mapped);
+    ::close(fd_);
+    fd_ = -1;
 #endif
 }
 

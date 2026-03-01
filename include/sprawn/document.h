@@ -23,7 +23,9 @@ public:
     std::string line(size_t line_number) const;
     size_t line_count() const;
 
+    /// Insert text at the given line and byte offset within that line.
     void insert(size_t line, size_t col, std::string_view text);
+    /// Erase `count` bytes starting at the given line and byte offset.
     void erase(size_t line, size_t col, size_t count);
 
 private:

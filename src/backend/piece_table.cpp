@@ -122,7 +122,7 @@ std::string PieceTable::text() const {
 }
 
 std::string PieceTable::text(size_t pos, size_t count) const {
-    if (pos + count > total_length_) {
+    if (count > total_length_ || pos > total_length_ - count) {
         count = total_length_ > pos ? total_length_ - pos : 0;
     }
     if (count == 0) return {};

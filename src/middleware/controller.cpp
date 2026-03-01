@@ -5,6 +5,10 @@ namespace sprawn {
 
 Controller::Controller(Document& doc) : doc_(doc) {}
 
+void Controller::open_file(const std::filesystem::path& path) {
+    doc_.open_file(path);
+}
+
 std::string Controller::line(size_t line_number) const {
     return doc_.line(line_number);
 }

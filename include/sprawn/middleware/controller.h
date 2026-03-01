@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <filesystem>
 #include <string>
 #include <string_view>
 
@@ -13,6 +14,7 @@ public:
     explicit Controller(Document& doc);
     virtual ~Controller() = default;
 
+    virtual void open_file(const std::filesystem::path& path);
     virtual std::string line(size_t line_number) const;
     virtual size_t line_count() const;
     virtual void insert(size_t line, size_t col, std::string_view text);

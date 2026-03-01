@@ -32,6 +32,9 @@ public:
     // Returns nullptr if the glyph cannot be rendered.
     const AtlasGlyph* get_or_add(uint32_t glyph_id, uint8_t font_index = 0);
 
+    // Const lookup — returns nullptr if the glyph is not already cached.
+    const AtlasGlyph* get(uint32_t glyph_id, uint8_t font_index = 0) const;
+
     SDL_Texture* texture() const { return texture_; }
 
 private:

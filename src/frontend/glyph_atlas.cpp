@@ -50,6 +50,14 @@ GlyphAtlas::~GlyphAtlas() {
     if (texture_) SDL_DestroyTexture(texture_);
 }
 
+const AtlasGlyph* GlyphAtlas::get(uint32_t glyph_id, uint8_t font_index) const {
+    uint64_t key = make_key(glyph_id, font_index);
+    auto it = cache_.find(key);
+    if (it != cache_.end())
+        return &it->second;
+    return nullptr;
+}
+
 const AtlasGlyph* GlyphAtlas::get_or_add(uint32_t glyph_id, uint8_t font_index) {
     uint64_t key = make_key(glyph_id, font_index);
     auto it = cache_.find(key);
@@ -57,7 +65,7 @@ const AtlasGlyph* GlyphAtlas::get_or_add(uint32_t glyph_id, uint8_t font_index) 
         return &it->second;
 
     GlyphBitmap bm = fonts_.font(font_index).rasterize_glyph(glyph_id);
-    if (bm.pixels.empty() && (bm.width == 0 || bm.height == 0)) {
+    if (bm.pixels.empty() || (bm.width == 0 || bm.height == 0)) {
         // Invisible or missing glyph — store a dummy entry so we don't retry
         AtlasGlyph ag{};
         ag.rect      = {0, 0, 0, 0};

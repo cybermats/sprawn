@@ -63,7 +63,7 @@ bool might_need_bidi(std::string_view utf8) {
 
 // Shape a single directional run with HarfBuzz and append results to out.
 // If max_width_px > 0, stop shaping when x_accum exceeds it. Returns true if truncated.
-bool shape_run(FontChain& fonts, GlyphAtlas& atlas,
+bool shape_run(FontChain& fonts, GlyphAtlas& /*atlas*/,
                std::string_view utf8,     // full line
                int run_start,             // byte offset of run in utf8
                int run_length,            // byte length
@@ -236,6 +236,13 @@ GlyphRun TextLayout::shape_line(std::string_view utf8, int max_width_px) {
         }
 
         int32_t run_count = ubidi_countRuns(bidi, &err);
+        if (U_FAILURE(err)) {
+            ubidi_close(bidi);
+            shape_run(fonts_, atlas_, utf8, 0, static_cast<int>(utf8.size()),
+                      HB_DIRECTION_LTR, x_accum, run.glyphs);
+            run.total_width = x_accum;
+            return run;
+        }
 
         // Build a UTF-16 offset → UTF-8 byte offset map
         // We need this to convert BiDi run positions (UTF-16) to byte offsets
@@ -351,7 +358,7 @@ size_t TextLayout::column_for_x(const GlyphRun& run, std::string_view utf8,
     // Check if past the last glyph
     if (!run.glyphs.empty()) {
         const GlyphEntry& last = run.glyphs.back();
-        const AtlasGlyph* ag = atlas_.get_or_add(last.glyph_id, last.font_index);
+        const AtlasGlyph* ag = atlas_.get(last.glyph_id, last.font_index);
         int adv = ag ? ag->advance_x : 0;
         int mid = last.x + adv / 2;
         if (phys_x > mid) {

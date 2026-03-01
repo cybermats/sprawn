@@ -16,9 +16,10 @@ namespace sprawn {
 
 bool run_application(std::string_view filepath) {
     Document doc;
+    Controller controller(doc);
     if (!filepath.empty()) {
         try {
-            doc.open_file(std::string(filepath));
+            controller.open_file(std::string(filepath));
         } catch (const std::exception& e) {
             std::fprintf(stderr, "sprawn: cannot open '%.*s': %s\n",
                          static_cast<int>(filepath.size()), filepath.data(),
@@ -26,7 +27,7 @@ bool run_application(std::string_view filepath) {
             return false;
         }
     } else {
-        doc.insert(0, 0, "");
+        controller.insert(0, 0, "");
     }
 
     try {
@@ -57,7 +58,6 @@ bool run_application(std::string_view filepath) {
         fonts.add_fallback("/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf");
 
         GlyphAtlas atlas(renderer, fonts);
-        Controller controller(doc);
         Editor editor(controller, renderer, fonts, atlas, kInitW, kInitH, scale);
 
         bool running = true;

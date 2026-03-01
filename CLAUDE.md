@@ -11,7 +11,7 @@ Handles file I/O and editing.
 
 - Opens files via **memory-mapped I/O** for a small memory footprint.
 - Edits are tracked with a **Piece Table**, so even multi-gigabyte files can be modified without rewriting the buffer.
-- Supports multiple character encodings (UTF-8, UTF-16, UTF-32, ASCII, ISO 8859-1, etc.). The original encoding is preserved internally; the frontend always receives UTF-8.
+- Currently supports UTF-8 and ASCII encodings. Additional encodings (UTF-16, UTF-32, ISO 8859-1, etc.) are a future goal. The frontend always receives UTF-8.
 - A **line index** provides fast random access to any line.
 
 Key public headers: `document.h`, `encoding.h`, `source.h`.

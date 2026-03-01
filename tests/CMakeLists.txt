@@ -1,6 +1,6 @@
 include(FetchContent)
 
-set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 
 FetchContent_Declare(
     doctest

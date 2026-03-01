@@ -333,6 +333,7 @@ void Editor::apply_command(const EditorCommand& cmd) {
                 line_cache_.invalidate_range(cursor_.line - 1, 1, -1);
                 --cursor_.line;
                 cursor_.col = prev_len;
+                recompute_gutter();
                 viewport_.ensure_line_visible(cursor_.line, ctrl_.line_count());
             }
 
@@ -352,6 +353,7 @@ void Editor::apply_command(const EditorCommand& cmd) {
                 // Merge with next line (delete the newline)
                 ctrl_.erase(cursor_.line, line_text_del.size(), 1);
                 line_cache_.invalidate_range(cursor_.line, 1, -1);
+                recompute_gutter();
             }
 
         } else if constexpr (std::is_same_v<T, NewLine>) {
@@ -365,6 +367,7 @@ void Editor::apply_command(const EditorCommand& cmd) {
             line_cache_.invalidate(cursor_.line + 1);
             ++cursor_.line;
             cursor_.col = 0;
+            recompute_gutter();
             viewport_.ensure_line_visible(cursor_.line, ctrl_.line_count());
 
         } else if constexpr (std::is_same_v<T, Copy>) {
@@ -392,8 +395,8 @@ void Editor::apply_command(const EditorCommand& cmd) {
             if (has_selection()) delete_selection();
             char* clipboard = SDL_GetClipboardText();
             if (clipboard) {
+                struct Guard { char* p; ~Guard() { SDL_free(p); } } guard{clipboard};
                 std::string text(clipboard);
-                SDL_free(clipboard);
                 {
                     std::string paste_line = ctrl_.line(cursor_.line);
                     size_t byte_col = utf8_byte_offset(paste_line, cursor_.col);
@@ -418,6 +421,7 @@ void Editor::apply_command(const EditorCommand& cmd) {
                     cursor_.line += newlines;
                     cursor_.col   = chars_after;
                     line_cache_.invalidate(cursor_.line);
+                    recompute_gutter();
                 }
                 viewport_.ensure_line_visible(cursor_.line, ctrl_.line_count());
             }

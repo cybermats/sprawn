@@ -47,7 +47,8 @@ bool Window::poll_events(const std::function<void(const SDL_Event&)>& handler) {
         if (ev.type == SDL_QUIT)
             return false;
         if (ev.type == SDL_WINDOWEVENT &&
-            ev.window.event == SDL_WINDOWEVENT_RESIZED)
+            (ev.window.event == SDL_WINDOWEVENT_RESIZED ||
+             ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED))
         {
             width_  = ev.window.data1;
             height_ = ev.window.data2;

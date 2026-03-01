@@ -36,6 +36,7 @@ int Viewport::line_to_y(size_t line) const {
 
 size_t Viewport::y_to_line(int y) const {
     if (y < 0) return first_line_ > 0 ? first_line_ - 1 : 0;
+    if (line_height_ <= 0) return first_line_;
     return first_line_ + static_cast<size_t>(y / line_height_);
 }
 
