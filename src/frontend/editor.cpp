@@ -505,32 +505,32 @@ void Editor::render() {
             if (!run_ptr) run_ptr = &tmp_run;
         }
 
-        // Draw selection highlight (before text so text renders on top)
-        if (sel && L >= sel_start.line && L <= sel_end.line) {
-            int x0, x1;
-            int win_w = viewport_.width_px();
-
-            if (sel_start.line == sel_end.line) {
-                x0 = text_x + layout_.x_for_column(*run_ptr, utf8, sel_start.col);
-                x1 = text_x + layout_.x_for_column(*run_ptr, utf8, sel_end.col);
-            } else if (L == sel_start.line) {
-                x0 = text_x + layout_.x_for_column(*run_ptr, utf8, sel_start.col);
-                x1 = win_w;
-            } else if (L == sel_end.line) {
-                x0 = gutter_width_;
-                x1 = text_x + layout_.x_for_column(*run_ptr, utf8, sel_end.col);
-            } else {
-                x0 = gutter_width_;
-                x1 = win_w;
-            }
-
-            if (x1 > x0)
-                renderer_.fill_rect(Rect{x0, y, x1 - x0, lh},
-                                    Color{65, 120, 200, 160});
-        }
-
-        // Draw text with decoration styling
+        // Fetch decorations and inject selection as a high-priority bg span
         LineDecoration deco = ctrl_.decorations(L);
+        if (sel && L >= sel_start.line && L <= sel_end.line) {
+            int b0, b1;
+            if (sel_start.line == sel_end.line) {
+                b0 = static_cast<int>(utf8_byte_offset(utf8, sel_start.col));
+                b1 = static_cast<int>(utf8_byte_offset(utf8, sel_end.col));
+            } else if (L == sel_start.line) {
+                b0 = static_cast<int>(utf8_byte_offset(utf8, sel_start.col));
+                b1 = static_cast<int>(utf8.size());
+            } else if (L == sel_end.line) {
+                b0 = 0;
+                b1 = static_cast<int>(utf8_byte_offset(utf8, sel_end.col));
+            } else {
+                b0 = 0;
+                b1 = static_cast<int>(utf8.size());
+            }
+            if (b1 > b0) {
+                StyledSpan sel_span;
+                sel_span.byte_start = b0;
+                sel_span.byte_end   = b1;
+                sel_span.style.bg   = Color{65, 120, 200, 160};
+                sel_span.priority    = 1000;
+                deco.spans.push_back(sel_span);
+            }
+        }
         auto flat = DecorationCompositor::flatten(deco, static_cast<int>(utf8.size()));
         layout_.draw_run(renderer_, *run_ptr, text_x, y, flat, utf8);
 
