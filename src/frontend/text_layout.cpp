@@ -378,6 +378,112 @@ void TextLayout::draw_run(Renderer& r, const GlyphRun& run, int x, int y,
     }
 }
 
+void TextLayout::draw_run(Renderer& r, const GlyphRun& run, int x, int y,
+                          const std::vector<StyledSpan>& flat_spans,
+                          std::string_view /*utf8*/)
+{
+    if (flat_spans.empty() || run.glyphs.empty()) {
+        // Fallback: use default white tint
+        draw_run(r, run, x, y, Color{220, 220, 220, 255});
+        return;
+    }
+
+    int baseline_y = y + ascent_;
+    float inv = 1.0f / dpi_scale_;
+
+    // Helper: binary search flat_spans for the span covering a byte offset.
+    // flat_spans are sorted, non-overlapping: span.byte_start <= offset < span.byte_end.
+    auto find_span = [&](int byte_offset) -> const StyledSpan* {
+        // Binary search for the rightmost span with byte_start <= byte_offset
+        int lo = 0, hi = static_cast<int>(flat_spans.size()) - 1;
+        int result_idx = -1;
+        while (lo <= hi) {
+            int mid = lo + (hi - lo) / 2;
+            if (flat_spans[mid].byte_start <= byte_offset) {
+                result_idx = mid;
+                lo = mid + 1;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        if (result_idx >= 0 && byte_offset < flat_spans[result_idx].byte_end)
+            return &flat_spans[result_idx];
+        return nullptr;
+    };
+
+    // Helper: get the pixel x-range for a glyph (using atlas advance for width)
+    auto glyph_x_range = [&](size_t gi) -> std::pair<int, int> {
+        const GlyphEntry& ge = run.glyphs[gi];
+        int gx = x + static_cast<int>(ge.x * inv);
+        const AtlasGlyph* ag = atlas_.get(ge.glyph_id, ge.font_index);
+        int adv = ag ? static_cast<int>(ag->advance_x * inv) : 0;
+        return {gx, gx + adv};
+    };
+
+    // Pass 1: Background rectangles
+    int lh = line_height_;
+    for (const auto& span : flat_spans) {
+        if (span.style.bg.a == 0)
+            continue;
+
+        // Find first and last glyph in this span's byte range
+        int x0 = -1, x1 = -1;
+        for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
+            int cluster = run.glyphs[gi].cluster;
+            if (cluster >= span.byte_start && cluster < span.byte_end) {
+                auto [gx0, gx1] = glyph_x_range(gi);
+                if (x0 < 0 || gx0 < x0) x0 = gx0;
+                if (gx1 > x1) x1 = gx1;
+            }
+        }
+        if (x0 >= 0 && x1 > x0)
+            r.fill_rect(Rect{x0, y, x1 - x0, lh}, span.style.bg);
+    }
+
+    // Pass 2: Glyph rendering with per-glyph fg color
+    for (const GlyphEntry& ge : run.glyphs) {
+        const AtlasGlyph* ag = atlas_.get_or_add(ge.glyph_id, ge.font_index);
+        if (!ag || ag->rect.w == 0 || ag->rect.h == 0)
+            continue;
+
+        Color fg{220, 220, 220, 255};
+        const StyledSpan* sp = find_span(ge.cluster);
+        if (sp)
+            fg = sp->style.fg;
+
+        SDL_Rect src = ag->rect;
+        SDL_Rect dst;
+        dst.x = x + static_cast<int>(ge.x * inv) + static_cast<int>(ag->bearing_x * inv);
+        dst.y = baseline_y - static_cast<int>(ag->bearing_y * inv) - static_cast<int>(ge.y_offset * inv);
+        dst.w = static_cast<int>(ag->rect.w * inv);
+        dst.h = static_cast<int>(ag->rect.h * inv);
+
+        r.blit(atlas_.texture(), src, dst, fg);
+    }
+
+    // Pass 3: Underline pass
+    for (const auto& span : flat_spans) {
+        if (!span.style.underline)
+            continue;
+
+        int x0 = -1, x1 = -1;
+        for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
+            int cluster = run.glyphs[gi].cluster;
+            if (cluster >= span.byte_start && cluster < span.byte_end) {
+                auto [gx0, gx1] = glyph_x_range(gi);
+                if (x0 < 0 || gx0 < x0) x0 = gx0;
+                if (gx1 > x1) x1 = gx1;
+            }
+        }
+        if (x0 >= 0 && x1 > x0) {
+            Color uc = span.style.underline_color;
+            if (uc.a == 0)
+                uc = span.style.fg; // fallback to fg color
+            r.fill_rect(Rect{x0, baseline_y + 2, x1 - x0, 1}, uc);
+        }
+    }
+}
+
 int TextLayout::x_for_column(const GlyphRun& run, std::string_view utf8,
                              size_t col) const
 {

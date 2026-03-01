@@ -1,12 +1,10 @@
 #pragma once
 
+#include <sprawn/color.h>
+
 #include <SDL2/SDL.h>
-#include <cstdint>
 
 namespace sprawn {
-
-struct Color { uint8_t r, g, b, a; };
-struct Rect  { int x, y, w, h; };
 
 using TextureHandle = SDL_Texture*;
 

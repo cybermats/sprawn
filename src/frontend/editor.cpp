@@ -1,4 +1,6 @@
 #include <sprawn/frontend/editor.h>
+#include <sprawn/decoration.h>
+#include <sprawn/frontend/decoration_compositor.h>
 #include "font_chain.h"
 #include "glyph_atlas.h"
 
@@ -527,8 +529,10 @@ void Editor::render() {
                                     Color{65, 120, 200, 160});
         }
 
-        // Draw text
-        layout_.draw_run(renderer_, *run_ptr, text_x, y, Color{220, 220, 220, 255});
+        // Draw text with decoration styling
+        LineDecoration deco = ctrl_.decorations(L);
+        auto flat = DecorationCompositor::flatten(deco, static_cast<int>(utf8.size()));
+        layout_.draw_run(renderer_, *run_ptr, text_x, y, flat, utf8);
 
         // Draw cursor if on this line
         if (L == cursor_.line)

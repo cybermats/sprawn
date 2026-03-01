@@ -14,6 +14,7 @@ add_library(sprawn_frontend
     line_cache.cpp
     viewport.cpp
     input_handler.cpp
+    decoration_compositor.cpp
     editor.cpp
     application.cpp
 )

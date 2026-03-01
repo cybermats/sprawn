@@ -22,3 +22,7 @@ sprawn_add_test(test_document)
 add_executable(test_controller test_controller.cpp)
 target_link_libraries(test_controller PRIVATE sprawn_middleware doctest_with_main)
 add_test(NAME test_controller COMMAND test_controller)
+
+add_executable(test_decoration_compositor test_decoration_compositor.cpp)
+target_link_libraries(test_decoration_compositor PRIVATE sprawn_frontend doctest_with_main)
+add_test(NAME test_decoration_compositor COMMAND test_decoration_compositor)

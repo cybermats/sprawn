@@ -2,6 +2,8 @@
 
 #include "renderer.h"
 
+#include <sprawn/decoration.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
@@ -36,6 +38,12 @@ public:
 
     // Blit all glyphs in the run at baseline position (x, y+ascent).
     void draw_run(Renderer& r, const GlyphRun& run, int x, int y, Color tint);
+
+    // Styled draw: render glyphs with per-span foreground, background, and underline.
+    // flat_spans must be sorted, non-overlapping (output of DecorationCompositor::flatten).
+    void draw_run(Renderer& r, const GlyphRun& run, int x, int y,
+                  const std::vector<StyledSpan>& flat_spans,
+                  std::string_view utf8);
 
     // Pixel x-offset of the left edge of column col within the run.
     // utf8 is the original line text (needed for byte↔codepoint mapping).
