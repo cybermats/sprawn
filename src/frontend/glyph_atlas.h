@@ -26,6 +26,9 @@ public:
     GlyphAtlas(const GlyphAtlas&) = delete;
     GlyphAtlas& operator=(const GlyphAtlas&) = delete;
 
+    // Clear all cached glyphs and reset the atlas. Re-pre-caches ASCII.
+    void clear();
+
     // Returns nullptr if the glyph cannot be rendered.
     const AtlasGlyph* get_or_add(uint32_t glyph_id, uint8_t font_index = 0);
 

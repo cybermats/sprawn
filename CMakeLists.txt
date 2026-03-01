@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_subdirectory(src/backend)
+add_subdirectory(src/middleware)
 add_subdirectory(src/frontend)
 
 option(SPRAWN_BUILD_TESTS "Build tests" ON)

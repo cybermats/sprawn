@@ -27,11 +27,8 @@ Window::Window(const char* title, int width, int height)
     if (!renderer_)
         throw std::runtime_error(std::string("SDL_CreateRenderer failed: ") + SDL_GetError());
 
-    // Compute DPI scale
-    int draw_w = 0;
-    SDL_GetRendererOutputSize(renderer_, &draw_w, nullptr);
-    if (draw_w > 0)
-        dpi_scale_ = static_cast<float>(draw_w) / static_cast<float>(width);
+    // Compute initial DPI scale
+    update_dpi_scale();
 
     // Enable text input
     SDL_StartTextInput();
@@ -54,10 +51,20 @@ bool Window::poll_events(const std::function<void(const SDL_Event&)>& handler) {
         {
             width_  = ev.window.data1;
             height_ = ev.window.data2;
+            update_dpi_scale();
         }
         handler(ev);
     }
     return true;
+}
+
+bool Window::update_dpi_scale() {
+    int draw_w = 0;
+    SDL_GetRendererOutputSize(renderer_, &draw_w, nullptr);
+    float old = dpi_scale_;
+    if (draw_w > 0 && width_ > 0)
+        dpi_scale_ = static_cast<float>(draw_w) / static_cast<float>(width_);
+    return dpi_scale_ != old;
 }
 
 void Window::present() {

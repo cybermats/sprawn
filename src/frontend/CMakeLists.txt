@@ -39,6 +39,7 @@ endif()
 target_link_libraries(sprawn_frontend
     PUBLIC
         sprawn_backend
+        sprawn_middleware
     PRIVATE
         ${_SDL2_LIB}
         Freetype::Freetype

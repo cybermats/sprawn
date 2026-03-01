@@ -25,12 +25,17 @@ public:
     // Returns {0, 0} if no font has it.
     std::pair<uint8_t, uint32_t> resolve(uint32_t codepoint) const;
 
+    // Rebuild all fonts at a new pixel size. Clears and recreates all FontFaces.
+    void rebuild(int new_size_px);
+
+    int size_px()       const { return size_px_; }
     int line_height()   const { return fonts_[0]->line_height(); }
     int ascent()        const { return fonts_[0]->ascent(); }
     int advance_width() const { return fonts_[0]->advance_width(); }
 
 private:
     std::vector<std::unique_ptr<FontFace>> fonts_;
+    std::vector<std::filesystem::path> paths_;
     int size_px_;
 };
 

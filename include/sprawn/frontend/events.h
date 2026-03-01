@@ -18,6 +18,7 @@ struct DeleteBackward {};
 struct DeleteForward  {};
 struct NewLine      {};
 struct ScrollLines  { float dy; };         // positive = scroll down
+struct ZoomFont     { int delta; };        // +1 = bigger, -1 = smaller
 struct ClickPosition { int x_px; int y_px; bool shift{false}; };
 struct Copy         {};
 struct Paste        {};
@@ -28,7 +29,7 @@ struct Quit         {};
 using EditorCommand = std::variant<
     MoveCursor, MoveHome, MoveEnd, MovePgUp, MovePgDn,
     InsertText, DeleteBackward, DeleteForward, NewLine,
-    ScrollLines, ClickPosition, Copy, Paste, Cut, SelectAll, Quit
+    ScrollLines, ZoomFont, ClickPosition, Copy, Paste, Cut, SelectAll, Quit
 >;
 
 } // namespace sprawn

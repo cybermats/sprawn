@@ -61,13 +61,15 @@ bool might_need_bidi(std::string_view utf8) {
 }
 
 // Shape a single directional run with HarfBuzz and append results to out.
-void shape_run(FontChain& fonts, GlyphAtlas& atlas,
+// If max_width_px > 0, stop shaping when x_accum exceeds it. Returns true if truncated.
+bool shape_run(FontChain& fonts, GlyphAtlas& atlas,
                std::string_view utf8,     // full line
                int run_start,             // byte offset of run in utf8
                int run_length,            // byte length
                hb_direction_t direction,
                int& x_accum,
-               std::vector<GlyphEntry>& out)
+               std::vector<GlyphEntry>& out,
+               int max_width_px = 0)
 {
     hb_buffer_t* buf = hb_buffer_create();
     hb_buffer_add_utf8(buf, utf8.data(), static_cast<int>(utf8.size()),
@@ -155,19 +157,32 @@ void shape_run(FontChain& fonts, GlyphAtlas& atlas,
         ge.cluster    = static_cast<int>(infos[i].cluster);
         out.push_back(ge);
         x_accum += pos[i].x_advance >> 6;
+
+        if (max_width_px > 0 && x_accum > max_width_px) {
+            hb_buffer_destroy(buf);
+            return true;
+        }
     }
 
     hb_buffer_destroy(buf);
+    return false;
 }
 
 } // namespace
 
-TextLayout::TextLayout(GlyphAtlas& atlas, FontChain& fonts)
-    : atlas_(atlas), fonts_(fonts),
-      line_height_(fonts.line_height()), ascent_(fonts.ascent())
+TextLayout::TextLayout(GlyphAtlas& atlas, FontChain& fonts, float dpi_scale)
+    : atlas_(atlas), fonts_(fonts), dpi_scale_(dpi_scale),
+      line_height_(static_cast<int>(fonts.line_height() / dpi_scale + 0.5f)),
+      ascent_(static_cast<int>(fonts.ascent() / dpi_scale + 0.5f))
 {}
 
-GlyphRun TextLayout::shape_line(std::string_view utf8) {
+void TextLayout::reset(float dpi_scale) {
+    dpi_scale_ = dpi_scale;
+    line_height_ = static_cast<int>(fonts_.line_height() / dpi_scale_ + 0.5f);
+    ascent_ = static_cast<int>(fonts_.ascent() / dpi_scale_ + 0.5f);
+}
+
+GlyphRun TextLayout::shape_line(std::string_view utf8, int max_width_px) {
     GlyphRun run;
     run.total_width = 0;
 
@@ -179,12 +194,15 @@ GlyphRun TextLayout::shape_line(std::string_view utf8) {
 
     if (utf8.empty()) return run;
 
+    // Convert logical limit to physical pixels for comparison with x_accum
+    int phys_limit = (max_width_px > 0) ? static_cast<int>(max_width_px * dpi_scale_) : 0;
+
     int x_accum = 0;
 
     if (!might_need_bidi(utf8)) {
         // Fast path: pure LTR, single HarfBuzz run
-        shape_run(fonts_, atlas_, utf8, 0, static_cast<int>(utf8.size()),
-                  HB_DIRECTION_LTR, x_accum, run.glyphs);
+        run.truncated = shape_run(fonts_, atlas_, utf8, 0, static_cast<int>(utf8.size()),
+                  HB_DIRECTION_LTR, x_accum, run.glyphs, phys_limit);
     } else {
         // ICU BiDi path
         // Convert UTF-8 to UTF-16 for ICU
@@ -275,6 +293,7 @@ void TextLayout::draw_run(Renderer& r, const GlyphRun& run, int x, int y,
                           Color tint)
 {
     int baseline_y = y + ascent_;
+    float inv = 1.0f / dpi_scale_;
 
     for (const GlyphEntry& ge : run.glyphs) {
         const AtlasGlyph* ag = atlas_.get_or_add(ge.glyph_id, ge.font_index);
@@ -283,10 +302,10 @@ void TextLayout::draw_run(Renderer& r, const GlyphRun& run, int x, int y,
 
         SDL_Rect src = ag->rect;
         SDL_Rect dst;
-        dst.x = x + ge.x + ag->bearing_x;
-        dst.y = baseline_y - ag->bearing_y - ge.y_offset;
-        dst.w = ag->rect.w;
-        dst.h = ag->rect.h;
+        dst.x = x + static_cast<int>(ge.x * inv) + static_cast<int>(ag->bearing_x * inv);
+        dst.y = baseline_y - static_cast<int>(ag->bearing_y * inv) - static_cast<int>(ge.y_offset * inv);
+        dst.w = static_cast<int>(ag->rect.w * inv);
+        dst.h = static_cast<int>(ag->rect.h * inv);
 
         r.blit(atlas_.texture(), src, dst, tint);
     }
@@ -297,18 +316,20 @@ int TextLayout::x_for_column(const GlyphRun& run, std::string_view utf8,
 {
     if (col == 0 || run.glyphs.empty()) return 0;
 
+    float inv = 1.0f / dpi_scale_;
+
     // Convert column (codepoint index) to byte offset
     size_t target_byte = col_to_byte_offset(utf8, col);
 
     // Find the first glyph at or past this byte offset
     for (size_t i = 0; i < run.glyphs.size(); ++i) {
         if (static_cast<size_t>(run.glyphs[i].cluster) >= target_byte) {
-            return run.glyphs[i].x;
+            return static_cast<int>(run.glyphs[i].x * inv);
         }
     }
 
     // Past the end: use total_width
-    return run.total_width;
+    return static_cast<int>(run.total_width * inv);
 }
 
 size_t TextLayout::column_for_x(const GlyphRun& run, std::string_view utf8,
@@ -316,10 +337,13 @@ size_t TextLayout::column_for_x(const GlyphRun& run, std::string_view utf8,
 {
     if (run.glyphs.empty() || x <= 0) return 0;
 
-    // Find nearest glyph by x position
+    // Convert logical x to physical for comparison with GlyphEntry positions
+    int phys_x = static_cast<int>(x * dpi_scale_);
+
+    // Find nearest glyph by x position (physical coords)
     for (size_t i = 0; i + 1 < run.glyphs.size(); ++i) {
         int mid = (run.glyphs[i].x + run.glyphs[i + 1].x) / 2;
-        if (x <= mid) {
+        if (phys_x <= mid) {
             return byte_offset_to_col(utf8, run.glyphs[i].cluster);
         }
     }
@@ -330,7 +354,7 @@ size_t TextLayout::column_for_x(const GlyphRun& run, std::string_view utf8,
         const AtlasGlyph* ag = atlas_.get_or_add(last.glyph_id, last.font_index);
         int adv = ag ? ag->advance_x : 0;
         int mid = last.x + adv / 2;
-        if (x > mid) {
+        if (phys_x > mid) {
             // Past end — return total codepoint count
             return byte_offset_to_col(utf8, static_cast<int>(utf8.size()));
         }

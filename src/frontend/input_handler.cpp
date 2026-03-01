@@ -56,6 +56,11 @@ std::optional<EditorCommand> InputHandler::translate(const SDL_Event& ev) const 
         break;
 
     case SDL_MOUSEWHEEL: {
+        bool ctrl = (SDL_GetModState() & KMOD_CTRL) != 0;
+        if (ctrl) {
+            // Ctrl+scroll = font zoom
+            return ZoomFont{ev.wheel.y > 0 ? 1 : -1};
+        }
         // SDL_MOUSEWHEEL: y > 0 means scroll up (content moves down → first_line_ decreases)
         // We define ScrollLines positive = scroll down (advance first_line_)
         float dy = -static_cast<float>(ev.wheel.y) * 3.0f;

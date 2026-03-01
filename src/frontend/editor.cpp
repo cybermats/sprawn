@@ -62,23 +62,43 @@ std::string format_line_number(size_t n, int width) {
 // Construction
 // ---------------------------------------------------------------------------
 
-Editor::Editor(Document& doc, Renderer& renderer,
+Editor::Editor(Controller& ctrl, Renderer& renderer,
                FontChain& fonts, GlyphAtlas& atlas,
-               int width_px, int height_px)
-    : doc_(doc),
+               int width_px, int height_px, float dpi_scale)
+    : ctrl_(ctrl),
       renderer_(renderer),
+      fonts_(fonts),
       atlas_(atlas),
-      layout_(atlas, fonts),
-      viewport_(width_px, height_px, fonts.line_height()),
-      line_cache_(512)
+      layout_(atlas, fonts, dpi_scale),
+      viewport_(width_px, height_px, layout_.line_height()),
+      line_cache_(512),
+      dpi_scale_(dpi_scale)
 {
-    // Pre-compute gutter width based on digit count of longest line number
-    size_t lc = doc_.line_count();
+    recompute_gutter();
+}
+
+void Editor::rebuild_fonts(int logical_size, float scale) {
+    font_size_logical_ = logical_size;
+    dpi_scale_ = scale;
+    int phys = static_cast<int>(logical_size * scale + 0.5f);
+    fonts_.rebuild(phys);
+    atlas_.clear();
+    layout_.reset(scale);
+    viewport_.set_line_height(layout_.line_height());
+    line_cache_.clear();
+    recompute_gutter();
+}
+
+void Editor::on_dpi_change(float new_scale) {
+    rebuild_fonts(font_size_logical_, new_scale);
+}
+
+void Editor::recompute_gutter() {
+    size_t lc = ctrl_.line_count();
     int digits = 1;
     for (size_t n = lc > 0 ? lc - 1 : 0; n >= 10; n /= 10) ++digits;
-
-    // Each digit is advance_width wide; add padding on both sides
-    gutter_width_ = digits * fonts.advance_width() + kGutterPad * 2;
+    int logical_adv = static_cast<int>(fonts_.advance_width() / dpi_scale_ + 0.5f);
+    gutter_width_ = digits * logical_adv + kGutterPad * 2;
 }
 
 // ---------------------------------------------------------------------------
@@ -124,7 +144,7 @@ std::string Editor::selected_text() const {
     auto [start, end] = selection_range();
 
     if (start.line == end.line) {
-        std::string s = doc_.line(start.line);
+        std::string s = ctrl_.line(start.line);
         size_t b0 = utf8_byte_offset(s, start.col);
         size_t b1 = utf8_byte_offset(s, end.col);
         return s.substr(b0, b1 - b0);
@@ -132,16 +152,16 @@ std::string Editor::selected_text() const {
 
     std::string result;
     // First partial line
-    std::string first_s = doc_.line(start.line);
+    std::string first_s = ctrl_.line(start.line);
     result += first_s.substr(utf8_byte_offset(first_s, start.col));
     result += '\n';
     // Middle lines
     for (size_t L = start.line + 1; L < end.line; ++L) {
-        result += doc_.line(L);
+        result += ctrl_.line(L);
         result += '\n';
     }
     // Last partial line
-    std::string last_s = doc_.line(end.line);
+    std::string last_s = ctrl_.line(end.line);
     result += last_s.substr(0, utf8_byte_offset(last_s, end.col));
     return result;
 }
@@ -153,16 +173,16 @@ void Editor::delete_selection() {
     size_t removed_lines = end.line - start.line;
 
     if (removed_lines == 0) {
-        doc_.erase(start.line, start.col, end.col - start.col);
+        ctrl_.erase(start.line, start.col, end.col - start.col);
         line_cache_.invalidate(start.line);
     } else {
         // Count total characters to erase (including newlines)
-        size_t count = utf8_char_count(doc_.line(start.line)) - start.col + 1;
+        size_t count = utf8_char_count(ctrl_.line(start.line)) - start.col + 1;
         for (size_t L = start.line + 1; L < end.line; ++L)
-            count += utf8_char_count(doc_.line(L)) + 1;
+            count += utf8_char_count(ctrl_.line(L)) + 1;
         count += end.col;
 
-        doc_.erase(start.line, start.col, count);
+        ctrl_.erase(start.line, start.col, count);
         line_cache_.invalidate(start.line);
         line_cache_.invalidate_range(start.line + 1, removed_lines,
                                      -static_cast<int>(removed_lines));
@@ -170,7 +190,7 @@ void Editor::delete_selection() {
 
     cursor_ = start;
     anchor_.active = false;
-    viewport_.ensure_line_visible(cursor_.line, doc_.line_count());
+    viewport_.ensure_line_visible(cursor_.line, ctrl_.line_count());
 }
 
 // ---------------------------------------------------------------------------
@@ -193,7 +213,7 @@ void Editor::apply_command(const EditorCommand& cmd) {
 
         if constexpr (std::is_same_v<T, MoveCursor>) {
             handle_shift(c.shift);
-            size_t total = doc_.line_count();
+            size_t total = ctrl_.line_count();
             if (total == 0) return;
 
             if (c.dy != 0) {
@@ -205,7 +225,7 @@ void Editor::apply_command(const EditorCommand& cmd) {
             }
 
             if (c.dx != 0) {
-                size_t char_count = utf8_char_count(doc_.line(cursor_.line));
+                size_t char_count = utf8_char_count(ctrl_.line(cursor_.line));
                 long long new_col = static_cast<long long>(cursor_.col) + c.dx;
                 if (new_col < 0) new_col = 0;
                 if (static_cast<size_t>(new_col) > char_count)
@@ -213,7 +233,7 @@ void Editor::apply_command(const EditorCommand& cmd) {
                 cursor_.col = static_cast<size_t>(new_col);
             }
 
-            viewport_.ensure_line_visible(cursor_.line, doc_.line_count());
+            viewport_.ensure_line_visible(cursor_.line, ctrl_.line_count());
 
         } else if constexpr (std::is_same_v<T, MoveHome>) {
             handle_shift(c.shift);
@@ -221,28 +241,28 @@ void Editor::apply_command(const EditorCommand& cmd) {
 
         } else if constexpr (std::is_same_v<T, MoveEnd>) {
             handle_shift(c.shift);
-            cursor_.col = utf8_char_count(doc_.line(cursor_.line));
+            cursor_.col = utf8_char_count(ctrl_.line(cursor_.line));
 
         } else if constexpr (std::is_same_v<T, MovePgUp>) {
             handle_shift(c.shift);
             size_t vl = viewport_.visible_lines();
             cursor_.line = cursor_.line > vl ? cursor_.line - vl : 0;
-            viewport_.ensure_line_visible(cursor_.line, doc_.line_count());
+            viewport_.ensure_line_visible(cursor_.line, ctrl_.line_count());
 
         } else if constexpr (std::is_same_v<T, MovePgDn>) {
             handle_shift(c.shift);
             size_t vl    = viewport_.visible_lines();
-            size_t total = doc_.line_count();
+            size_t total = ctrl_.line_count();
             cursor_.line = std::min(cursor_.line + vl, total > 0 ? total - 1 : 0);
-            viewport_.ensure_line_visible(cursor_.line, doc_.line_count());
+            viewport_.ensure_line_visible(cursor_.line, ctrl_.line_count());
 
         } else if constexpr (std::is_same_v<T, ScrollLines>) {
-            viewport_.scroll_by(0.0f, c.dy, doc_.line_count());
+            viewport_.scroll_by(0.0f, c.dy, ctrl_.line_count());
 
         } else if constexpr (std::is_same_v<T, ClickPosition>) {
             // Determine clicked line
             size_t clicked_line = viewport_.y_to_line(c.y_px);
-            size_t total = doc_.line_count();
+            size_t total = ctrl_.line_count();
             if (total > 0 && clicked_line >= total)
                 clicked_line = total - 1;
 
@@ -250,7 +270,7 @@ void Editor::apply_command(const EditorCommand& cmd) {
             int text_x = c.x_px - gutter_width_ + viewport_.scroll_x_px();
             if (text_x < 0) text_x = 0;
 
-            std::string utf8 = doc_.line(clicked_line);
+            std::string utf8 = ctrl_.line(clicked_line);
             uint64_t h = fnv1a(utf8);
             const GlyphRun* cached = line_cache_.get(clicked_line, h);
             size_t col;
@@ -273,7 +293,7 @@ void Editor::apply_command(const EditorCommand& cmd) {
 
         } else if constexpr (std::is_same_v<T, InsertText>) {
             if (has_selection()) delete_selection();
-            doc_.insert(cursor_.line, cursor_.col, c.text);
+            ctrl_.insert(cursor_.line, cursor_.col, c.text);
             cursor_.col += utf8_char_count(c.text);
             line_cache_.invalidate(cursor_.line);
 
@@ -283,16 +303,16 @@ void Editor::apply_command(const EditorCommand& cmd) {
                 return;
             }
             if (cursor_.col > 0) {
-                doc_.erase(cursor_.line, cursor_.col - 1, 1);
+                ctrl_.erase(cursor_.line, cursor_.col - 1, 1);
                 --cursor_.col;
                 line_cache_.invalidate(cursor_.line);
             } else if (cursor_.line > 0) {
-                size_t prev_len = utf8_char_count(doc_.line(cursor_.line - 1));
-                doc_.erase(cursor_.line - 1, prev_len, 1);
+                size_t prev_len = utf8_char_count(ctrl_.line(cursor_.line - 1));
+                ctrl_.erase(cursor_.line - 1, prev_len, 1);
                 line_cache_.invalidate_range(cursor_.line - 1, 1, -1);
                 --cursor_.line;
                 cursor_.col = prev_len;
-                viewport_.ensure_line_visible(cursor_.line, doc_.line_count());
+                viewport_.ensure_line_visible(cursor_.line, ctrl_.line_count());
             }
 
         } else if constexpr (std::is_same_v<T, DeleteForward>) {
@@ -300,28 +320,28 @@ void Editor::apply_command(const EditorCommand& cmd) {
                 delete_selection();
                 return;
             }
-            size_t char_count = utf8_char_count(doc_.line(cursor_.line));
+            size_t char_count = utf8_char_count(ctrl_.line(cursor_.line));
             if (cursor_.col < char_count) {
-                doc_.erase(cursor_.line, cursor_.col, 1);
+                ctrl_.erase(cursor_.line, cursor_.col, 1);
                 line_cache_.invalidate(cursor_.line);
             } else {
                 // Merge with next line (delete the newline)
-                doc_.erase(cursor_.line, cursor_.col, 1);
+                ctrl_.erase(cursor_.line, cursor_.col, 1);
                 line_cache_.invalidate_range(cursor_.line, 1, -1);
             }
 
         } else if constexpr (std::is_same_v<T, NewLine>) {
             if (has_selection()) delete_selection();
-            doc_.insert(cursor_.line, cursor_.col, "\n");
+            ctrl_.insert(cursor_.line, cursor_.col, "\n");
             line_cache_.invalidate_range(cursor_.line, 0, 1);
             line_cache_.invalidate(cursor_.line + 1);
             ++cursor_.line;
             cursor_.col = 0;
-            viewport_.ensure_line_visible(cursor_.line, doc_.line_count());
+            viewport_.ensure_line_visible(cursor_.line, ctrl_.line_count());
 
         } else if constexpr (std::is_same_v<T, Copy>) {
             std::string text = has_selection() ? selected_text()
-                                               : doc_.line(cursor_.line);
+                                               : ctrl_.line(cursor_.line);
             SDL_SetClipboardText(text.c_str());
 
         } else if constexpr (std::is_same_v<T, Cut>) {
@@ -331,11 +351,11 @@ void Editor::apply_command(const EditorCommand& cmd) {
                 delete_selection();
             } else {
                 // Cut entire line content
-                std::string s = doc_.line(cursor_.line);
+                std::string s = ctrl_.line(cursor_.line);
                 SDL_SetClipboardText(s.c_str());
                 size_t char_count = utf8_char_count(s);
                 if (char_count > 0) {
-                    doc_.erase(cursor_.line, 0, char_count);
+                    ctrl_.erase(cursor_.line, 0, char_count);
                     cursor_.col = 0;
                     line_cache_.invalidate(cursor_.line);
                 }
@@ -347,7 +367,7 @@ void Editor::apply_command(const EditorCommand& cmd) {
             if (clipboard) {
                 std::string text(clipboard);
                 SDL_free(clipboard);
-                doc_.insert(cursor_.line, cursor_.col, text);
+                ctrl_.insert(cursor_.line, cursor_.col, text);
 
                 // Update cursor past the inserted text
                 size_t newlines = 0;
@@ -368,15 +388,21 @@ void Editor::apply_command(const EditorCommand& cmd) {
                     cursor_.col   = chars_after;
                     line_cache_.invalidate(cursor_.line);
                 }
-                viewport_.ensure_line_visible(cursor_.line, doc_.line_count());
+                viewport_.ensure_line_visible(cursor_.line, ctrl_.line_count());
             }
 
         } else if constexpr (std::is_same_v<T, SelectAll>) {
-            size_t total = doc_.line_count();
+            size_t total = ctrl_.line_count();
             if (total == 0) return;
             anchor_ = {0, 0, true};
             cursor_.line = total - 1;
-            cursor_.col  = utf8_char_count(doc_.line(cursor_.line));
+            cursor_.col  = utf8_char_count(ctrl_.line(cursor_.line));
+
+        } else if constexpr (std::is_same_v<T, ZoomFont>) {
+            int new_size = font_size_logical_ + c.delta * 2;
+            new_size = std::clamp(new_size, 8, 72);
+            if (new_size != font_size_logical_)
+                rebuild_fonts(new_size, dpi_scale_);
 
         } else if constexpr (std::is_same_v<T, Quit>) {
             SDL_Event quit{};
@@ -394,7 +420,7 @@ void Editor::apply_command(const EditorCommand& cmd) {
 void Editor::render() {
     renderer_.begin_frame(Color{30, 30, 30, 255});
 
-    size_t total = doc_.line_count();
+    size_t total = ctrl_.line_count();
     if (total == 0) {
         renderer_.end_frame();
         return;
@@ -422,12 +448,21 @@ void Editor::render() {
         int text_x = gutter_width_ - viewport_.scroll_x_px();
 
         // Shape the line (from cache or fresh)
-        std::string utf8 = doc_.line(L);
+        std::string utf8 = ctrl_.line(L);
         uint64_t    h    = fnv1a(utf8);
         const GlyphRun* run_ptr = line_cache_.get(L, h);
         GlyphRun tmp_run;
         if (!run_ptr) {
-            tmp_run = layout_.shape_line(utf8);
+            // Lazy shaping: only shape up to visible width + margin
+            int shape_limit = viewport_.width_px() - gutter_width_
+                            + viewport_.scroll_x_px() + 200;
+            tmp_run = layout_.shape_line(utf8, shape_limit);
+
+            // If cursor is on this truncated line, re-shape fully
+            if (tmp_run.truncated && L == cursor_.line) {
+                tmp_run = layout_.shape_line(utf8);
+            }
+
             line_cache_.put(L, h, tmp_run);
             run_ptr = line_cache_.get(L, h);
             if (!run_ptr) run_ptr = &tmp_run;

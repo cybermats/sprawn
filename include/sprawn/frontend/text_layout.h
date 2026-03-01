@@ -22,15 +22,17 @@ struct GlyphEntry {
 
 struct GlyphRun {
     std::vector<GlyphEntry> glyphs;
-    int total_width; // total advance width in pixels
+    int total_width;       // total advance width in pixels
+    bool truncated{false}; // true if shaping stopped early (lazy shaping)
 };
 
 class TextLayout {
 public:
-    TextLayout(GlyphAtlas& atlas, FontChain& fonts);
+    TextLayout(GlyphAtlas& atlas, FontChain& fonts, float dpi_scale = 1.0f);
 
     // Shape a UTF-8 line using HarfBuzz + ICU BiDi.
-    GlyphRun shape_line(std::string_view utf8);
+    // If max_width_px > 0, stop shaping after exceeding that logical width (lazy shaping).
+    GlyphRun shape_line(std::string_view utf8, int max_width_px = 0);
 
     // Blit all glyphs in the run at baseline position (x, y+ascent).
     void draw_run(Renderer& r, const GlyphRun& run, int x, int y, Color tint);
@@ -46,12 +48,16 @@ public:
     int x_for_column(const GlyphRun&, size_t) const = delete;
     size_t column_for_x(const GlyphRun&, int) const = delete;
 
+    // Reinitialize with a new DPI scale (after font rebuild).
+    void reset(float dpi_scale);
+
     int line_height() const { return line_height_; }
     int ascent()      const { return ascent_; }
 
 private:
     GlyphAtlas& atlas_;
     FontChain&  fonts_;
+    float dpi_scale_{1.0f};
     int line_height_;
     int ascent_;
 };

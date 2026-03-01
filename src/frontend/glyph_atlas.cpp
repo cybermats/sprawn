@@ -27,6 +27,25 @@ GlyphAtlas::GlyphAtlas(Renderer& renderer, FontChain& fonts,
     }
 }
 
+void GlyphAtlas::clear() {
+    cache_.clear();
+    cur_x_ = 1;
+    cur_y_ = 1;
+    shelf_h_ = 0;
+
+    // Blank the texture
+    std::vector<uint8_t> blank(atlas_w_ * atlas_h_ * 4, 0);
+    renderer_.update_texture(texture_, blank.data(), atlas_w_ * 4);
+
+    // Re-pre-cache common ASCII printable range using primary font glyph IDs
+    FontFace& primary = fonts_.primary();
+    for (uint32_t cp = 32; cp < 127; ++cp) {
+        uint32_t gid = primary.glyph_index(cp);
+        if (gid != 0)
+            get_or_add(gid, 0);
+    }
+}
+
 GlyphAtlas::~GlyphAtlas() {
     if (texture_) SDL_DestroyTexture(texture_);
 }

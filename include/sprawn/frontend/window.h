@@ -18,6 +18,9 @@ public:
 
     void present();
 
+    // Recalculate DPI scale from renderer output size. Returns true if changed.
+    bool update_dpi_scale();
+
     SDL_Renderer* sdl_renderer() const { return renderer_; }
     int width_px()  const { return width_;  }
     int height_px() const { return height_; }
