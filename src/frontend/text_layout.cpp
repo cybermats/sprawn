@@ -1,74 +1,273 @@
 #include <sprawn/frontend/text_layout.h>
+#include "font_chain.h"
 #include "glyph_atlas.h"
 
+#include <hb.h>
+#include <unicode/ubidi.h>
+#include <unicode/ustring.h>
+
+#include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <string_view>
+#include <vector>
 
 namespace sprawn {
 
 namespace {
 
-// Decode one UTF-8 codepoint from [pos, end). Advances pos past the sequence.
-// Returns replacement char U+FFFD on invalid bytes.
-uint32_t decode_utf8(const char*& pos, const char* end) {
-    auto b = [](const char* p) { return static_cast<uint8_t>(*p); };
-
-    if (pos >= end) return 0;
-
-    uint8_t c = b(pos);
-    uint32_t cp;
-    int extra;
-
-    if (c < 0x80)        { cp = c;           extra = 0; }
-    else if (c < 0xC0)   { ++pos; return 0xFFFD; }  // continuation byte
-    else if (c < 0xE0)   { cp = c & 0x1F;   extra = 1; }
-    else if (c < 0xF0)   { cp = c & 0x0F;   extra = 2; }
-    else if (c < 0xF8)   { cp = c & 0x07;   extra = 3; }
-    else                 { ++pos; return 0xFFFD; }
-
-    ++pos;
-    for (int i = 0; i < extra; ++i) {
-        if (pos >= end || (b(pos) & 0xC0) != 0x80) return 0xFFFD;
-        cp = (cp << 6) | (b(pos) & 0x3F);
-        ++pos;
+// Convert a byte offset in a UTF-8 string to a codepoint (column) index.
+size_t byte_offset_to_col(std::string_view utf8, int byte_off) {
+    size_t col = 0;
+    size_t i = 0;
+    size_t target = static_cast<size_t>(byte_off);
+    if (target > utf8.size()) target = utf8.size();
+    while (i < target && i < utf8.size()) {
+        uint8_t b = static_cast<uint8_t>(utf8[i]);
+        if      (b < 0x80) i += 1;
+        else if (b < 0xE0) i += 2;
+        else if (b < 0xF0) i += 3;
+        else               i += 4;
+        ++col;
     }
-    return cp;
+    return col;
+}
+
+// Convert a codepoint (column) index to a byte offset in a UTF-8 string.
+size_t col_to_byte_offset(std::string_view utf8, size_t col) {
+    size_t i = 0;
+    for (size_t n = 0; n < col && i < utf8.size(); ++n) {
+        uint8_t b = static_cast<uint8_t>(utf8[i]);
+        if      (b < 0x80) i += 1;
+        else if (b < 0xE0) i += 2;
+        else if (b < 0xF0) i += 3;
+        else               i += 4;
+    }
+    return i;
+}
+
+// Check if the UTF-8 string might contain RTL or complex scripts.
+// Returns true if any byte >= 0xD6 (start of Hebrew block U+0590 = 0xD6 0x90).
+bool might_need_bidi(std::string_view utf8) {
+    for (size_t i = 0; i < utf8.size(); ++i) {
+        uint8_t b = static_cast<uint8_t>(utf8[i]);
+        // Two-byte sequences for U+0590+ start with 0xD6 or higher lead byte.
+        // Three/four-byte sequences always have lead >= 0xE0.
+        // We check for >= 0xD6 as a fast heuristic.
+        if (b >= 0xD6 && b != 0xFF)
+            return true;
+    }
+    return false;
+}
+
+// Shape a single directional run with HarfBuzz and append results to out.
+void shape_run(FontChain& fonts, GlyphAtlas& atlas,
+               std::string_view utf8,     // full line
+               int run_start,             // byte offset of run in utf8
+               int run_length,            // byte length
+               hb_direction_t direction,
+               int& x_accum,
+               std::vector<GlyphEntry>& out)
+{
+    hb_buffer_t* buf = hb_buffer_create();
+    hb_buffer_add_utf8(buf, utf8.data(), static_cast<int>(utf8.size()),
+                       run_start, run_length);
+    hb_buffer_set_direction(buf, direction);
+    hb_buffer_guess_segment_properties(buf);
+
+    hb_shape(fonts.primary().hb_font(), buf, nullptr, 0);
+
+    unsigned glyph_count = 0;
+    hb_glyph_info_t*     infos = hb_buffer_get_glyph_infos(buf, &glyph_count);
+    hb_glyph_position_t* pos   = hb_buffer_get_glyph_positions(buf, &glyph_count);
+
+    // First pass: collect glyphs, detect .notdef (glyph_id == 0) for fallback
+    for (unsigned i = 0; i < glyph_count; ++i) {
+        uint32_t gid = infos[i].codepoint;
+        uint8_t  font_idx = 0;
+
+        if (gid == 0) {
+            // Try fallback fonts for this cluster's codepoint
+            int cluster_byte = static_cast<int>(infos[i].cluster);
+            // Decode the codepoint at this cluster position
+            const char* p = utf8.data() + cluster_byte;
+            const char* end = utf8.data() + utf8.size();
+            uint32_t cp = 0;
+            if (p < end) {
+                uint8_t b = static_cast<uint8_t>(*p);
+                if (b < 0x80) {
+                    cp = b;
+                } else if (b < 0xE0) {
+                    cp = b & 0x1F;
+                    if (p + 1 < end) cp = (cp << 6) | (static_cast<uint8_t>(p[1]) & 0x3F);
+                } else if (b < 0xF0) {
+                    cp = b & 0x0F;
+                    if (p + 1 < end) cp = (cp << 6) | (static_cast<uint8_t>(p[1]) & 0x3F);
+                    if (p + 2 < end) cp = (cp << 6) | (static_cast<uint8_t>(p[2]) & 0x3F);
+                } else {
+                    cp = b & 0x07;
+                    if (p + 1 < end) cp = (cp << 6) | (static_cast<uint8_t>(p[1]) & 0x3F);
+                    if (p + 2 < end) cp = (cp << 6) | (static_cast<uint8_t>(p[2]) & 0x3F);
+                    if (p + 3 < end) cp = (cp << 6) | (static_cast<uint8_t>(p[3]) & 0x3F);
+                }
+            }
+
+            auto [fi, fallback_gid] = fonts.resolve(cp);
+            if (fallback_gid != 0) {
+                // Re-shape this single cluster with the fallback font
+                hb_buffer_t* fb_buf = hb_buffer_create();
+                hb_buffer_add_utf8(fb_buf, utf8.data(), static_cast<int>(utf8.size()),
+                                   cluster_byte,
+                                   // length of this cluster: distance to next cluster or run end
+                                   (i + 1 < glyph_count)
+                                       ? static_cast<int>(infos[i + 1].cluster) - cluster_byte
+                                       : run_start + run_length - cluster_byte);
+                hb_buffer_set_direction(fb_buf, direction);
+                hb_buffer_guess_segment_properties(fb_buf);
+                hb_shape(fonts.font(fi).hb_font(), fb_buf, nullptr, 0);
+
+                unsigned fb_count = 0;
+                hb_glyph_info_t*     fb_infos = hb_buffer_get_glyph_infos(fb_buf, &fb_count);
+                hb_glyph_position_t* fb_pos   = hb_buffer_get_glyph_positions(fb_buf, &fb_count);
+
+                double scale = fonts.font(fi).bitmap_scale();
+                for (unsigned j = 0; j < fb_count; ++j) {
+                    GlyphEntry ge;
+                    ge.glyph_id   = fb_infos[j].codepoint;
+                    ge.font_index = fi;
+                    ge.x          = x_accum + static_cast<int>((fb_pos[j].x_offset >> 6) * scale);
+                    ge.y_offset   = static_cast<int>((fb_pos[j].y_offset >> 6) * scale);
+                    ge.cluster    = static_cast<int>(fb_infos[j].cluster);
+                    out.push_back(ge);
+                    x_accum += static_cast<int>((fb_pos[j].x_advance >> 6) * scale);
+                }
+
+                hb_buffer_destroy(fb_buf);
+                continue;
+            }
+        }
+
+        GlyphEntry ge;
+        ge.glyph_id   = gid;
+        ge.font_index = font_idx;
+        ge.x          = x_accum + (pos[i].x_offset >> 6);
+        ge.y_offset   = pos[i].y_offset >> 6;
+        ge.cluster    = static_cast<int>(infos[i].cluster);
+        out.push_back(ge);
+        x_accum += pos[i].x_advance >> 6;
+    }
+
+    hb_buffer_destroy(buf);
 }
 
 } // namespace
 
-TextLayout::TextLayout(GlyphAtlas& atlas, int line_height, int ascent)
-    : atlas_(atlas), line_height_(line_height), ascent_(ascent)
+TextLayout::TextLayout(GlyphAtlas& atlas, FontChain& fonts)
+    : atlas_(atlas), fonts_(fonts),
+      line_height_(fonts.line_height()), ascent_(fonts.ascent())
 {}
 
 GlyphRun TextLayout::shape_line(std::string_view utf8) {
     GlyphRun run;
     run.total_width = 0;
 
-    const char* pos = utf8.data();
-    const char* end = pos + utf8.size();
+    if (utf8.empty()) return run;
 
-    while (pos < end) {
-        const char* seq_start = pos;
-        uint32_t cp = decode_utf8(pos, end);
+    // Strip trailing \r\n for shaping
+    while (!utf8.empty() && (utf8.back() == '\r' || utf8.back() == '\n'))
+        utf8.remove_suffix(1);
 
-        // Skip \r and \n
-        if (cp == '\r' || cp == '\n') continue;
-        // Skip NUL
-        if (cp == 0) continue;
+    if (utf8.empty()) return run;
 
-        GlyphEntry ge;
-        ge.codepoint = cp;
-        ge.x         = run.total_width;
-        ge.cluster   = static_cast<int>(seq_start - utf8.data());
+    int x_accum = 0;
 
-        const AtlasGlyph* ag = atlas_.get_or_add(cp);
-        if (ag)
-            run.total_width += ag->advance_x;
+    if (!might_need_bidi(utf8)) {
+        // Fast path: pure LTR, single HarfBuzz run
+        shape_run(fonts_, atlas_, utf8, 0, static_cast<int>(utf8.size()),
+                  HB_DIRECTION_LTR, x_accum, run.glyphs);
+    } else {
+        // ICU BiDi path
+        // Convert UTF-8 to UTF-16 for ICU
+        int32_t u16_len = 0;
+        UErrorCode err = U_ZERO_ERROR;
+        u_strFromUTF8(nullptr, 0, &u16_len,
+                      utf8.data(), static_cast<int32_t>(utf8.size()), &err);
+        err = U_ZERO_ERROR; // reset buffer overflow error
 
-        run.glyphs.push_back(ge);
+        std::vector<UChar> u16(u16_len + 1);
+        u_strFromUTF8(u16.data(), u16_len + 1, &u16_len,
+                      utf8.data(), static_cast<int32_t>(utf8.size()), &err);
+
+        if (U_FAILURE(err)) {
+            // Fallback to LTR on conversion failure
+            shape_run(fonts_, atlas_, utf8, 0, static_cast<int>(utf8.size()),
+                      HB_DIRECTION_LTR, x_accum, run.glyphs);
+            run.total_width = x_accum;
+            return run;
+        }
+
+        UBiDi* bidi = ubidi_open();
+        ubidi_setPara(bidi, u16.data(), u16_len, UBIDI_DEFAULT_LTR, nullptr, &err);
+
+        if (U_FAILURE(err)) {
+            ubidi_close(bidi);
+            shape_run(fonts_, atlas_, utf8, 0, static_cast<int>(utf8.size()),
+                      HB_DIRECTION_LTR, x_accum, run.glyphs);
+            run.total_width = x_accum;
+            return run;
+        }
+
+        int32_t run_count = ubidi_countRuns(bidi, &err);
+
+        // Build a UTF-16 offset → UTF-8 byte offset map
+        // We need this to convert BiDi run positions (UTF-16) to byte offsets
+        std::vector<int32_t> u16_to_u8(u16_len + 1);
+        {
+            int32_t u8i = 0, u16i = 0;
+            const char* p = utf8.data();
+            const char* end = utf8.data() + utf8.size();
+            while (p < end && u16i <= u16_len) {
+                u16_to_u8[u16i] = u8i;
+                uint8_t b = static_cast<uint8_t>(*p);
+                int u8_seq_len;
+                int u16_seq_len;
+                if (b < 0x80)        { u8_seq_len = 1; u16_seq_len = 1; }
+                else if (b < 0xE0)   { u8_seq_len = 2; u16_seq_len = 1; }
+                else if (b < 0xF0)   { u8_seq_len = 3; u16_seq_len = 1; }
+                else                 { u8_seq_len = 4; u16_seq_len = 2; } // surrogate pair
+                // Fill intermediate UTF-16 indices (for surrogate pairs)
+                for (int k = 1; k < u16_seq_len && u16i + k <= u16_len; ++k)
+                    u16_to_u8[u16i + k] = u8i;
+                p += u8_seq_len;
+                u8i += u8_seq_len;
+                u16i += u16_seq_len;
+            }
+            // Sentinel at end
+            if (u16i <= u16_len)
+                u16_to_u8[u16i] = u8i;
+        }
+
+        for (int32_t i = 0; i < run_count; ++i) {
+            int32_t logical_start = 0, length = 0;
+            UBiDiDirection dir = ubidi_getVisualRun(bidi, i, &logical_start, &length);
+
+            // Convert UTF-16 positions to UTF-8 byte offsets
+            int32_t u8_start = u16_to_u8[logical_start];
+            int32_t u8_end   = (logical_start + length <= u16_len)
+                                   ? u16_to_u8[logical_start + length]
+                                   : static_cast<int32_t>(utf8.size());
+
+            hb_direction_t hb_dir = (dir == UBIDI_RTL) ? HB_DIRECTION_RTL
+                                                        : HB_DIRECTION_LTR;
+
+            shape_run(fonts_, atlas_, utf8, u8_start, u8_end - u8_start,
+                      hb_dir, x_accum, run.glyphs);
+        }
+
+        ubidi_close(bidi);
     }
 
+    run.total_width = x_accum;
     return run;
 }
 
@@ -78,14 +277,14 @@ void TextLayout::draw_run(Renderer& r, const GlyphRun& run, int x, int y,
     int baseline_y = y + ascent_;
 
     for (const GlyphEntry& ge : run.glyphs) {
-        const AtlasGlyph* ag = atlas_.get_or_add(ge.codepoint);
+        const AtlasGlyph* ag = atlas_.get_or_add(ge.glyph_id, ge.font_index);
         if (!ag || ag->rect.w == 0 || ag->rect.h == 0)
             continue;
 
         SDL_Rect src = ag->rect;
         SDL_Rect dst;
         dst.x = x + ge.x + ag->bearing_x;
-        dst.y = baseline_y - ag->bearing_y;
+        dst.y = baseline_y - ag->bearing_y - ge.y_offset;
         dst.w = ag->rect.w;
         dst.h = ag->rect.h;
 
@@ -93,38 +292,52 @@ void TextLayout::draw_run(Renderer& r, const GlyphRun& run, int x, int y,
     }
 }
 
-int TextLayout::x_for_column(const GlyphRun& run, size_t col) const {
+int TextLayout::x_for_column(const GlyphRun& run, std::string_view utf8,
+                             size_t col) const
+{
     if (col == 0 || run.glyphs.empty()) return 0;
 
-    if (col >= run.glyphs.size()) {
-        // Past the end: use last glyph x + its advance
-        const GlyphEntry& last = run.glyphs.back();
-        const AtlasGlyph* ag   = atlas_.get_or_add(last.codepoint);
-        int adv = ag ? ag->advance_x : 0;
-        return last.x + adv;
+    // Convert column (codepoint index) to byte offset
+    size_t target_byte = col_to_byte_offset(utf8, col);
+
+    // Find the first glyph at or past this byte offset
+    for (size_t i = 0; i < run.glyphs.size(); ++i) {
+        if (static_cast<size_t>(run.glyphs[i].cluster) >= target_byte) {
+            return run.glyphs[i].x;
+        }
     }
 
-    return run.glyphs[col].x;
+    // Past the end: use total_width
+    return run.total_width;
 }
 
-size_t TextLayout::column_for_x(const GlyphRun& run, int x) const {
+size_t TextLayout::column_for_x(const GlyphRun& run, std::string_view utf8,
+                                int x) const
+{
     if (run.glyphs.empty() || x <= 0) return 0;
 
+    // Find nearest glyph by x position
     for (size_t i = 0; i + 1 < run.glyphs.size(); ++i) {
         int mid = (run.glyphs[i].x + run.glyphs[i + 1].x) / 2;
-        if (x <= mid) return i;
+        if (x <= mid) {
+            return byte_offset_to_col(utf8, run.glyphs[i].cluster);
+        }
     }
 
-    // Check if x is beyond the last glyph midpoint
+    // Check if past the last glyph
     if (!run.glyphs.empty()) {
         const GlyphEntry& last = run.glyphs.back();
-        const AtlasGlyph* ag   = atlas_.get_or_add(last.codepoint);
-        int adv  = ag ? ag->advance_x : 0;
-        int mid  = last.x + adv / 2;
-        if (x > mid) return run.glyphs.size(); // past end
+        const AtlasGlyph* ag = atlas_.get_or_add(last.glyph_id, last.font_index);
+        int adv = ag ? ag->advance_x : 0;
+        int mid = last.x + adv / 2;
+        if (x > mid) {
+            // Past end — return total codepoint count
+            return byte_offset_to_col(utf8, static_cast<int>(utf8.size()));
+        }
     }
 
-    return run.glyphs.size() > 0 ? run.glyphs.size() - 1 : 0;
+    // Last glyph
+    return byte_offset_to_col(utf8, run.glyphs.back().cluster);
 }
 
 } // namespace sprawn

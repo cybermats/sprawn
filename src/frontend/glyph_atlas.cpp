@@ -5,9 +5,9 @@
 
 namespace sprawn {
 
-GlyphAtlas::GlyphAtlas(Renderer& renderer, FontFace& font,
+GlyphAtlas::GlyphAtlas(Renderer& renderer, FontChain& fonts,
                        int atlas_w, int atlas_h)
-    : renderer_(renderer), font_(font),
+    : renderer_(renderer), fonts_(fonts),
       atlas_w_(atlas_w), atlas_h_(atlas_h)
 {
     texture_ = renderer_.create_texture(atlas_w_, atlas_h_);
@@ -18,30 +18,35 @@ GlyphAtlas::GlyphAtlas(Renderer& renderer, FontFace& font,
     std::vector<uint8_t> clear(atlas_w_ * atlas_h_ * 4, 0);
     renderer_.update_texture(texture_, clear.data(), atlas_w_ * 4);
 
-    // Pre-cache common ASCII printable range
-    for (uint32_t cp = 32; cp < 127; ++cp)
-        get_or_add(cp);
+    // Pre-cache common ASCII printable range using primary font glyph IDs
+    FontFace& primary = fonts_.primary();
+    for (uint32_t cp = 32; cp < 127; ++cp) {
+        uint32_t gid = primary.glyph_index(cp);
+        if (gid != 0)
+            get_or_add(gid, 0);
+    }
 }
 
 GlyphAtlas::~GlyphAtlas() {
     if (texture_) SDL_DestroyTexture(texture_);
 }
 
-const AtlasGlyph* GlyphAtlas::get_or_add(uint32_t codepoint) {
-    auto it = cache_.find(codepoint);
+const AtlasGlyph* GlyphAtlas::get_or_add(uint32_t glyph_id, uint8_t font_index) {
+    uint64_t key = make_key(glyph_id, font_index);
+    auto it = cache_.find(key);
     if (it != cache_.end())
         return &it->second;
 
-    GlyphBitmap bm = font_.rasterize(codepoint);
+    GlyphBitmap bm = fonts_.font(font_index).rasterize_glyph(glyph_id);
     if (bm.pixels.empty() && (bm.width == 0 || bm.height == 0)) {
         // Invisible or missing glyph — store a dummy entry so we don't retry
         AtlasGlyph ag{};
         ag.rect      = {0, 0, 0, 0};
         ag.bearing_x = bm.bearing_x;
         ag.bearing_y = bm.bearing_y;
-        ag.advance_x = bm.advance_x > 0 ? bm.advance_x : font_.advance_width();
-        cache_[codepoint] = ag;
-        return &cache_[codepoint];
+        ag.advance_x = bm.advance_x > 0 ? bm.advance_x : fonts_.advance_width();
+        cache_[key] = ag;
+        return &cache_[key];
     }
 
     const int pad = 1;
@@ -72,24 +77,29 @@ const AtlasGlyph* GlyphAtlas::get_or_add(uint32_t codepoint) {
 
     cur_x_ += w;
 
-    cache_[codepoint] = ag;
-    return &cache_[codepoint];
+    cache_[key] = ag;
+    return &cache_[key];
 }
 
 void GlyphAtlas::upload_glyph(int tex_x, int tex_y, const GlyphBitmap& bm) {
-    // Convert alpha-only bitmap to RGBA (white text, varying alpha)
     int w = bm.width;
     int h = bm.height;
-    std::vector<uint8_t> rgba(w * h * 4);
-    for (int i = 0; i < w * h; ++i) {
-        rgba[i * 4 + 0] = 255;
-        rgba[i * 4 + 1] = 255;
-        rgba[i * 4 + 2] = 255;
-        rgba[i * 4 + 3] = bm.pixels[i];
-    }
-
     SDL_Rect dst{tex_x, tex_y, w, h};
-    SDL_UpdateTexture(texture_, &dst, rgba.data(), w * 4);
+
+    if (bm.color) {
+        // Color emoji: pixels are already RGBA
+        SDL_UpdateTexture(texture_, &dst, bm.pixels.data(), w * 4);
+    } else {
+        // Alpha-only bitmap → RGBA (white text, varying alpha)
+        std::vector<uint8_t> rgba(w * h * 4);
+        for (int i = 0; i < w * h; ++i) {
+            rgba[i * 4 + 0] = 255;
+            rgba[i * 4 + 1] = 255;
+            rgba[i * 4 + 2] = 255;
+            rgba[i * 4 + 3] = bm.pixels[i];
+        }
+        SDL_UpdateTexture(texture_, &dst, rgba.data(), w * 4);
+    }
 }
 
 } // namespace sprawn

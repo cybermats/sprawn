@@ -1,6 +1,6 @@
 #pragma once
 
-#include "font_face.h"
+#include "font_chain.h"
 #include <sprawn/frontend/renderer.h>
 
 #include <SDL2/SDL.h>
@@ -19,21 +19,21 @@ struct AtlasGlyph {
 
 class GlyphAtlas {
 public:
-    GlyphAtlas(Renderer& renderer, FontFace& font,
+    GlyphAtlas(Renderer& renderer, FontChain& fonts,
                int atlas_w = 1024, int atlas_h = 1024);
     ~GlyphAtlas();
 
     GlyphAtlas(const GlyphAtlas&) = delete;
     GlyphAtlas& operator=(const GlyphAtlas&) = delete;
 
-    // Returns nullptr if the codepoint cannot be rendered.
-    const AtlasGlyph* get_or_add(uint32_t codepoint);
+    // Returns nullptr if the glyph cannot be rendered.
+    const AtlasGlyph* get_or_add(uint32_t glyph_id, uint8_t font_index = 0);
 
     SDL_Texture* texture() const { return texture_; }
 
 private:
     Renderer&   renderer_;
-    FontFace&   font_;
+    FontChain&  fonts_;
     SDL_Texture* texture_{};
     int atlas_w_, atlas_h_;
 
@@ -42,7 +42,12 @@ private:
     int cur_y_{1};
     int shelf_h_{0};
 
-    std::unordered_map<uint32_t, AtlasGlyph> cache_;
+    // Key: (uint64_t(font_index) << 32) | glyph_id
+    std::unordered_map<uint64_t, AtlasGlyph> cache_;
+
+    static uint64_t make_key(uint32_t glyph_id, uint8_t font_index) {
+        return (uint64_t(font_index) << 32) | glyph_id;
+    }
 
     // Upload a single glyph bitmap region to the texture.
     void upload_glyph(int tex_x, int tex_y, const GlyphBitmap& bm);
