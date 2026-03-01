@@ -131,3 +131,67 @@ TEST_CASE("Document: non-existent file throws") {
     Document doc;
     CHECK_THROWS(doc.open_file("/tmp/sprawn_nonexistent_file_12345"));
 }
+
+TEST_CASE("Document: erase with count 0 is a no-op") {
+    TempFile file("Hello");
+    Document doc;
+    doc.open_file(file.path());
+
+    doc.erase(0, 2, 0);
+    CHECK(doc.line(0) == "Hello");
+}
+
+TEST_CASE("Document: erase all content") {
+    TempFile file("abc\ndef");
+    Document doc;
+    doc.open_file(file.path());
+
+    // Erase everything (7 bytes: "abc\ndef")
+    doc.erase(0, 0, 7);
+    CHECK(doc.line_count() == 1);
+    CHECK(doc.line(0) == "");
+}
+
+TEST_CASE("Document: repeated insert at position 0") {
+    TempFile file("");
+    Document doc;
+    doc.open_file(file.path());
+
+    doc.insert(0, 0, "C");
+    doc.insert(0, 0, "B");
+    doc.insert(0, 0, "A");
+    CHECK(doc.line(0) == "ABC");
+}
+
+TEST_CASE("Document: multi-byte UTF-8 column offsets") {
+    // é is 2 bytes (0xC3 0xA9), columns are byte offsets
+    TempFile file("café");
+    Document doc;
+    doc.open_file(file.path());
+
+    // "café" is 5 bytes: c(1) a(1) f(1) é(2)
+    CHECK(doc.line(0) == "café");
+
+    // Insert after the é (byte offset 5)
+    doc.insert(0, 5, "!");
+    CHECK(doc.line(0) == "café!");
+
+    // Insert before the é (byte offset 3)
+    doc.insert(0, 3, " ");
+    CHECK(doc.line(0) == "caf é!");
+}
+
+TEST_CASE("Document: open second file replaces first") {
+    TempFile file1("first");
+    TempFile file2("second\nfile");
+    Document doc;
+
+    doc.open_file(file1.path());
+    CHECK(doc.line(0) == "first");
+    CHECK(doc.line_count() == 1);
+
+    doc.open_file(file2.path());
+    CHECK(doc.line(0) == "second");
+    CHECK(doc.line(1) == "file");
+    CHECK(doc.line_count() == 2);
+}

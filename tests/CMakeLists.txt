@@ -18,3 +18,7 @@ endfunction()
 sprawn_add_test(test_piece_table)
 sprawn_add_test(test_line_index)
 sprawn_add_test(test_document)
+
+add_executable(test_controller test_controller.cpp)
+target_link_libraries(test_controller PRIVATE sprawn_middleware doctest_with_main)
+add_test(NAME test_controller COMMAND test_controller)

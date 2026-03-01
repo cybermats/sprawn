@@ -142,3 +142,24 @@ TEST_CASE("PieceTable: erase out of range throws") {
 
     CHECK_THROWS_AS(pt.erase(2, 5), std::out_of_range);
 }
+
+TEST_CASE("PieceTable: text with overflow clamps") {
+    const char* data = "Hello";
+    auto span = std::span(reinterpret_cast<const std::byte*>(data), 5);
+    PieceTable pt(span);
+
+    // pos + count would overflow size_t
+    CHECK(pt.text(3, SIZE_MAX) == "lo");
+    // pos beyond length
+    CHECK(pt.text(10, 5) == "");
+}
+
+TEST_CASE("PieceTable: erase with count 0 is a no-op") {
+    const char* data = "Hello";
+    auto span = std::span(reinterpret_cast<const std::byte*>(data), 5);
+    PieceTable pt(span);
+
+    pt.erase(2, 0);
+    CHECK(pt.text() == "Hello");
+    CHECK(pt.length() == 5);
+}

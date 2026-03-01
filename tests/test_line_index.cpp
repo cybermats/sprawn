@@ -122,6 +122,21 @@ TEST_CASE("LineIndex: classic mac line endings") {
     CHECK(pt.text(s2.offset, s2.length) == "ghi");
 }
 
+TEST_CASE("LineIndex: multi-byte UTF-8 to_offset treats col as byte offset") {
+    // "café" = 5 bytes: c(1) a(1) f(1) é(2 bytes: 0xC3 0xA9)
+    auto pt = make_table("café\nworld");
+    LineIndex idx;
+    idx.rebuild(pt);
+
+    // Line 0 starts at offset 0, is 5 bytes long
+    CHECK(idx.to_offset(0, 0) == 0);  // 'c'
+    CHECK(idx.to_offset(0, 3) == 3);  // first byte of 'é'
+    CHECK(idx.to_offset(0, 5) == 5);  // one past end (at newline)
+
+    // Line 1 starts at offset 6 (after "café\n")
+    CHECK(idx.to_offset(1, 0) == 6);
+}
+
 TEST_CASE("LineIndex: col validation") {
     auto pt = make_table("abc\ndef");
     LineIndex idx;
