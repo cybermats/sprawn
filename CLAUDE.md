@@ -1,23 +1,70 @@
-# Sprawn - editor
+# Sprawn
 
-Sprawn is a text editor supporting very large files across all modern platforms.
+A text editor built for very large files, targeting all modern platforms.
 
 ## Architecture
 
-The system consists of a few different modules. The frontend is responsible for showing the text interface and handles conversions of file encodings etc. The backend is responsible for reading input and handling i/o. The middleware controller is going to be the location for plugins, such as font highlighting, search, and general plugin infrastructure that we will add in the future.
+Sprawn is split into three layers: **backend**, **middleware**, and **frontend**. Each layer lives in its own source directory with a matching public header directory under `include/sprawn/`.
 
-### Frontend
-The frontend is modular to support multiple ways of rendering the editor. The initial version supports a cross platform window system, displaying unicode text and can display most modern languages (latin, chinese and arabic for name a few) and emojis.
+### Backend (`src/backend/`)
+Handles file I/O and editing.
 
-The frontend keeps a local small cache of the currently and recently displayed lines. It renders all text layout internally (no widget toolkit).
+- Opens files via **memory-mapped I/O** for a small memory footprint.
+- Edits are tracked with a **Piece Table**, so even multi-gigabyte files can be modified without rewriting the buffer.
+- Supports multiple character encodings (UTF-8, UTF-16, UTF-32, ASCII, ISO 8859-1, etc.). The original encoding is preserved internally; the frontend always receives UTF-8.
+- A **line index** provides fast random access to any line.
 
-The frontend receives the text encoded as UTF8 Unicode from the backend. The frontend is responsbile for making modifications to the text in order to display it, such as removing \r from Windows or Mac based files.
+Key public headers: `document.h`, `encoding.h`, `source.h`.
 
-### Backend
-The backend can read from many types of sources, streaming from URLs or random access such as files. The files is opened using memory mapped files in order to maintain a small memory footprint.
-The backend handles editing using a Piece Table. That way we can open very large files and still support swift editing.
-The backend supports many types of character encoding (UTF8, UTF16, UTF32, ASCII, ISO 8859-1 to name the modern ones). It maintains the original character encoding internally but exposes a common encoding to the frontend, such as unicode and UTF8.
+### Middleware (`src/middleware/`)
+Thin pass-through layer between the frontend and the backend.
 
-### Middleware Controller
-The middleware is responsible for the interaction between the frontend and the backend. Initially it wont do anything.
+- `Controller` wraps a `Document` and exposes `line()`, `line_count()`, `insert()`, `erase()`.
+- All methods are `virtual` so future plugins (syntax highlighting, search, etc.) can intercept or augment calls.
+- The `Editor` talks exclusively through `Controller&`, never directly to `Document`.
+
+### Frontend (`src/frontend/`)
+Cross-platform graphical editor built on **SDL2**, **FreeType**, **HarfBuzz**, and **ICU**.
+
+- No widget toolkit — all text layout and rendering is done internally.
+- Full Unicode support: Latin, CJK, Arabic (BiDi via ICU), color emoji.
+- **Font fallback chain**: primary font → Noto Sans Mono → DejaVu Sans Mono.
+- **Glyph atlas**: shelf-packed RGBA texture for fast GPU blitting.
+- **LRU line cache** with FNV-1a hash for stale detection.
+- HiDPI aware (fonts rasterized at `logical_size × dpi_scale`).
+- Runtime font zoom via Ctrl+scroll (8–72 logical px).
+- Text selection and clipboard support.
+- Lazy shaping: `shape_line()` can truncate at a max pixel width.
+
+Key public headers: `application.h`, `editor.h`, `events.h`, `viewport.h`, `text_layout.h`, `line_cache.h`, `renderer.h`, `window.h`, `input_handler.h`.
+
+## Build
+
+```bash
+cmake -B build
+cmake --build build -j$(nproc)
+```
+
+Run: `./build/src/frontend/sprawn [file]`
+
+Tests: `cd build && ctest --output-on-failure`
+
+Requires C++20. Dependencies: SDL2, FreeType, HarfBuzz, ICU.
+
+## Project layout
+
+```
+include/sprawn/           Public headers
+  document.h              Document API (line, insert, erase, line_count)
+  encoding.h              Encoding detection and conversion
+  source.h                Abstract data source
+  frontend/               Frontend public headers
+  middleware/controller.h  Controller interface
+src/
+  backend/                Document, PieceTable, MappedFile, LineIndex, Encoding
+  middleware/              Controller implementation
+  frontend/               Application, Editor, Window, Renderer, TextLayout, …
+  main.cpp                Entry point → sprawn::run_application(filepath)
+tests/                    doctest unit tests (PieceTable, LineIndex, Document)
+```
 
