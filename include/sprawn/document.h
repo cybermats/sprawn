@@ -1,5 +1,7 @@
 #pragma once
 
+#include <sprawn/encoding.h>
+
 #include <cstddef>
 #include <filesystem>
 #include <memory>
@@ -27,6 +29,9 @@ public:
     void insert(size_t line, size_t col, std::string_view text);
     /// Erase `count` bytes starting at the given line and byte offset.
     void erase(size_t line, size_t col, size_t count);
+
+    /// Returns the detected encoding of the currently open file.
+    Encoding encoding() const;
 
 private:
     struct Impl;

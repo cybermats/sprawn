@@ -21,6 +21,8 @@ const char* PieceTable::buffer_data(Buffer buf) const {
     return add_buffer_.data();
 }
 
+// O(N) linear scan over pieces. A tree-based index (e.g. balanced BST or
+// B-tree keyed by cumulative length) would make this O(log N) — future optimization.
 PieceTable::PieceLocation PieceTable::find_piece(size_t pos) const {
     size_t offset = 0;
     for (size_t i = 0; i < pieces_.size(); ++i) {

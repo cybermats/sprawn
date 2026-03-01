@@ -84,83 +84,143 @@ bool shape_run(FontChain& fonts, GlyphAtlas& /*atlas*/,
     hb_glyph_info_t*     infos = hb_buffer_get_glyph_infos(buf, &glyph_count);
     hb_glyph_position_t* pos   = hb_buffer_get_glyph_positions(buf, &glyph_count);
 
-    // First pass: collect glyphs, detect .notdef (glyph_id == 0) for fallback
-    for (unsigned i = 0; i < glyph_count; ++i) {
-        uint32_t gid = infos[i].codepoint;
-        uint8_t  font_idx = 0;
-
-        if (gid == 0) {
-            // Try fallback fonts for this cluster's codepoint
-            int cluster_byte = static_cast<int>(infos[i].cluster);
-            // Decode the codepoint at this cluster position
-            const char* p = utf8.data() + cluster_byte;
-            const char* end = utf8.data() + utf8.size();
-            uint32_t cp = 0;
-            if (p < end) {
-                uint8_t b = static_cast<uint8_t>(*p);
-                if (b < 0x80) {
-                    cp = b;
-                } else if (b < 0xE0) {
-                    cp = b & 0x1F;
-                    if (p + 1 < end) cp = (cp << 6) | (static_cast<uint8_t>(p[1]) & 0x3F);
-                } else if (b < 0xF0) {
-                    cp = b & 0x0F;
-                    if (p + 1 < end) cp = (cp << 6) | (static_cast<uint8_t>(p[1]) & 0x3F);
-                    if (p + 2 < end) cp = (cp << 6) | (static_cast<uint8_t>(p[2]) & 0x3F);
-                } else {
-                    cp = b & 0x07;
-                    if (p + 1 < end) cp = (cp << 6) | (static_cast<uint8_t>(p[1]) & 0x3F);
-                    if (p + 2 < end) cp = (cp << 6) | (static_cast<uint8_t>(p[2]) & 0x3F);
-                    if (p + 3 < end) cp = (cp << 6) | (static_cast<uint8_t>(p[3]) & 0x3F);
-                }
-            }
-
-            auto [fi, fallback_gid] = fonts.resolve(cp);
-            if (fallback_gid != 0) {
-                // Re-shape this single cluster with the fallback font
-                hb_buffer_t* fb_buf = hb_buffer_create();
-                int cluster_len = (i + 1 < glyph_count)
-                    ? std::abs(static_cast<int>(infos[i + 1].cluster) - cluster_byte)
-                    : std::abs(run_start + run_length - cluster_byte);
-                hb_buffer_add_utf8(fb_buf, utf8.data(), static_cast<int>(utf8.size()),
-                                   cluster_byte, cluster_len);
-                hb_buffer_set_direction(fb_buf, direction);
-                hb_buffer_guess_segment_properties(fb_buf);
-                hb_shape(fonts.font(fi).hb_font(), fb_buf, nullptr, 0);
-
-                unsigned fb_count = 0;
-                hb_glyph_info_t*     fb_infos = hb_buffer_get_glyph_infos(fb_buf, &fb_count);
-                hb_glyph_position_t* fb_pos   = hb_buffer_get_glyph_positions(fb_buf, &fb_count);
-
-                double scale = fonts.font(fi).bitmap_scale();
-                for (unsigned j = 0; j < fb_count; ++j) {
-                    GlyphEntry ge;
-                    ge.glyph_id   = fb_infos[j].codepoint;
-                    ge.font_index = fi;
-                    ge.x          = x_accum + static_cast<int>((fb_pos[j].x_offset >> 6) * scale);
-                    ge.y_offset   = static_cast<int>((fb_pos[j].y_offset >> 6) * scale);
-                    ge.cluster    = static_cast<int>(fb_infos[j].cluster);
-                    out.push_back(ge);
-                    x_accum += static_cast<int>((fb_pos[j].x_advance >> 6) * scale);
-                }
-
-                hb_buffer_destroy(fb_buf);
-                continue;
-            }
+    // Decode the codepoint at a given byte position in utf8.
+    auto decode_cp = [&](int byte_pos) -> uint32_t {
+        const char* p = utf8.data() + byte_pos;
+        const char* end = utf8.data() + utf8.size();
+        if (p >= end) return 0;
+        uint8_t b = static_cast<uint8_t>(*p);
+        uint32_t cp;
+        if (b < 0x80) {
+            cp = b;
+        } else if (b < 0xE0) {
+            cp = b & 0x1F;
+            if (p + 1 < end) cp = (cp << 6) | (static_cast<uint8_t>(p[1]) & 0x3F);
+        } else if (b < 0xF0) {
+            cp = b & 0x0F;
+            if (p + 1 < end) cp = (cp << 6) | (static_cast<uint8_t>(p[1]) & 0x3F);
+            if (p + 2 < end) cp = (cp << 6) | (static_cast<uint8_t>(p[2]) & 0x3F);
+        } else {
+            cp = b & 0x07;
+            if (p + 1 < end) cp = (cp << 6) | (static_cast<uint8_t>(p[1]) & 0x3F);
+            if (p + 2 < end) cp = (cp << 6) | (static_cast<uint8_t>(p[2]) & 0x3F);
+            if (p + 3 < end) cp = (cp << 6) | (static_cast<uint8_t>(p[3]) & 0x3F);
         }
+        return cp;
+    };
 
-        GlyphEntry ge;
-        ge.glyph_id   = gid;
-        ge.font_index = font_idx;
-        ge.x          = x_accum + (pos[i].x_offset >> 6);
-        ge.y_offset   = pos[i].y_offset >> 6;
-        ge.cluster    = static_cast<int>(infos[i].cluster);
-        out.push_back(ge);
-        x_accum += pos[i].x_advance >> 6;
+    // Two-phase approach: first collect segments (primary glyphs vs fallback runs),
+    // then process sequentially. This groups consecutive .notdef glyphs that resolve
+    // to the same fallback font into a single shaping run for proper contextual shaping.
+    struct Segment {
+        enum Kind { Primary, Fallback };
+        Kind kind;
+        unsigned start;  // index into infos/pos arrays
+        unsigned count;
+        uint8_t font_index;  // only for Fallback
+    };
+    std::vector<Segment> segments;
 
-        if (max_width_px > 0 && x_accum > max_width_px) {
-            hb_buffer_destroy(buf);
-            return true;
+    unsigned i = 0;
+    while (i < glyph_count) {
+        if (infos[i].codepoint == 0) {
+            // .notdef — resolve fallback font for this glyph
+            int cluster_byte = static_cast<int>(infos[i].cluster);
+            uint32_t cp = decode_cp(cluster_byte);
+            auto [fi, fallback_gid] = fonts.resolve(cp);
+
+            if (fallback_gid != 0) {
+                // Start a fallback run, grouping consecutive .notdef glyphs
+                // that resolve to the same fallback font
+                unsigned run_start_idx = i;
+                uint8_t run_font = fi;
+                ++i;
+                while (i < glyph_count && infos[i].codepoint == 0) {
+                    int cb = static_cast<int>(infos[i].cluster);
+                    uint32_t cp2 = decode_cp(cb);
+                    auto [fi2, gid2] = fonts.resolve(cp2);
+                    if (gid2 == 0 || fi2 != run_font) break;
+                    ++i;
+                }
+                segments.push_back({Segment::Fallback, run_start_idx,
+                                    i - run_start_idx, run_font});
+            } else {
+                // No fallback found — emit as primary (.notdef / tofu)
+                segments.push_back({Segment::Primary, i, 1, 0});
+                ++i;
+            }
+        } else {
+            // Primary glyph — group consecutive primary glyphs
+            unsigned run_start_idx = i;
+            ++i;
+            while (i < glyph_count && infos[i].codepoint != 0)
+                ++i;
+            segments.push_back({Segment::Primary, run_start_idx,
+                                i - run_start_idx, 0});
+        }
+    }
+
+    // Second phase: process each segment
+    for (const auto& seg : segments) {
+        if (seg.kind == Segment::Primary) {
+            for (unsigned j = seg.start; j < seg.start + seg.count; ++j) {
+                GlyphEntry ge;
+                ge.glyph_id   = infos[j].codepoint;
+                ge.font_index = 0;
+                ge.x          = x_accum + (pos[j].x_offset >> 6);
+                ge.y_offset   = pos[j].y_offset >> 6;
+                ge.cluster    = static_cast<int>(infos[j].cluster);
+                out.push_back(ge);
+                x_accum += pos[j].x_advance >> 6;
+
+                if (max_width_px > 0 && x_accum > max_width_px) {
+                    hb_buffer_destroy(buf);
+                    return true;
+                }
+            }
+        } else {
+            // Fallback run: re-shape the entire byte range as one HarfBuzz buffer
+            int fb_byte_start = static_cast<int>(infos[seg.start].cluster);
+            unsigned last = seg.start + seg.count - 1;
+            int last_cluster = static_cast<int>(infos[last].cluster);
+            int fb_byte_end;
+            if (last + 1 < glyph_count) {
+                fb_byte_end = static_cast<int>(infos[last + 1].cluster);
+            } else {
+                fb_byte_end = run_start + run_length;
+            }
+            // Handle RTL where clusters may be in reverse order
+            if (fb_byte_start > fb_byte_end) std::swap(fb_byte_start, fb_byte_end);
+            if (fb_byte_start > last_cluster) fb_byte_start = last_cluster;
+            if (fb_byte_end < last_cluster) fb_byte_end = last_cluster;
+
+            int fb_len = fb_byte_end - fb_byte_start;
+            if (fb_len <= 0) fb_len = 1;
+
+            hb_buffer_t* fb_buf = hb_buffer_create();
+            hb_buffer_add_utf8(fb_buf, utf8.data(), static_cast<int>(utf8.size()),
+                               fb_byte_start, fb_len);
+            hb_buffer_set_direction(fb_buf, direction);
+            hb_buffer_guess_segment_properties(fb_buf);
+            hb_shape(fonts.font(seg.font_index).hb_font(), fb_buf, nullptr, 0);
+
+            unsigned fb_count = 0;
+            hb_glyph_info_t*     fb_infos = hb_buffer_get_glyph_infos(fb_buf, &fb_count);
+            hb_glyph_position_t* fb_pos   = hb_buffer_get_glyph_positions(fb_buf, &fb_count);
+
+            double scale = fonts.font(seg.font_index).bitmap_scale();
+            for (unsigned j = 0; j < fb_count; ++j) {
+                GlyphEntry ge;
+                ge.glyph_id   = fb_infos[j].codepoint;
+                ge.font_index = seg.font_index;
+                ge.x          = x_accum + static_cast<int>((fb_pos[j].x_offset >> 6) * scale);
+                ge.y_offset   = static_cast<int>((fb_pos[j].y_offset >> 6) * scale);
+                ge.cluster    = static_cast<int>(fb_infos[j].cluster);
+                out.push_back(ge);
+                x_accum += static_cast<int>((fb_pos[j].x_advance >> 6) * scale);
+            }
+
+            hb_buffer_destroy(fb_buf);
         }
     }
 

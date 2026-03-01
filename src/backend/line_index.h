@@ -31,7 +31,7 @@ private:
     // line_starts_[i] is the byte offset where line i begins
     std::vector<size_t> line_starts_;
     // cr_before_lf_[i] is true if line i ends with \r\n (not just \n)
-    std::vector<bool> cr_before_lf_;
+    std::vector<char> cr_before_lf_;
     size_t total_length_ = 0;
 };
 

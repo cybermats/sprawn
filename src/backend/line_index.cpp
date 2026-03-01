@@ -31,15 +31,15 @@ void LineIndex::rebuild(const PieceTable& table) {
                     // break for the \r — replace it with the correct \r\n break.
                     // The line start is after the \n, not after the \r.
                     line_starts_.back() = global_offset + i + 1;
-                    cr_before_lf_.back() = true;
+                    cr_before_lf_.back() = 1;
                 } else {
-                    cr_before_lf_.push_back(false);
+                    cr_before_lf_.push_back(0);
                     line_starts_.push_back(global_offset + i + 1);
                 }
             } else if (data[i] == '\r') {
                 // Tentatively treat as a line break (classic Mac).
                 // If followed by \n, the \n handler above will correct it.
-                cr_before_lf_.push_back(false);
+                cr_before_lf_.push_back(0);
                 line_starts_.push_back(global_offset + i + 1);
             }
             prev_char = data[i];
@@ -47,7 +47,7 @@ void LineIndex::rebuild(const PieceTable& table) {
         global_offset += len;
     }
     // Last line has no terminator
-    cr_before_lf_.push_back(false);
+    cr_before_lf_.push_back(0);
 }
 
 size_t LineIndex::line_count() const {

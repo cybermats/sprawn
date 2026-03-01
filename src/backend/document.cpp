@@ -57,4 +57,8 @@ void Document::erase(size_t line, size_t col, size_t count) {
     impl_->rebuild_index();
 }
 
+Encoding Document::encoding() const {
+    return impl_->encoding;
+}
+
 } // namespace sprawn

@@ -3,9 +3,11 @@
 #include <sprawn/document.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <unistd.h>
 
 using namespace sprawn;
 
@@ -14,13 +16,12 @@ namespace {
 class TempFile {
 public:
     explicit TempFile(const std::string& content) {
-        path_ = std::filesystem::temp_directory_path() / "sprawn_test_XXXXXX";
-        // Create a unique filename
-        path_ = std::filesystem::temp_directory_path() /
-                ("sprawn_test_" + std::to_string(reinterpret_cast<uintptr_t>(this)));
-
-        std::ofstream ofs(path_, std::ios::binary);
-        ofs.write(content.data(), static_cast<std::streamsize>(content.size()));
+        std::string tmpl = (std::filesystem::temp_directory_path() / "sprawn_test_XXXXXX").string();
+        int fd = mkstemp(tmpl.data());
+        if (fd == -1) throw std::runtime_error("mkstemp failed");
+        path_ = tmpl;
+        ::write(fd, content.data(), content.size());
+        ::close(fd);
     }
 
     ~TempFile() {

@@ -14,6 +14,11 @@ public:
     explicit Controller(Document& doc);
     virtual ~Controller() = default;
 
+    Controller(const Controller&) = delete;
+    Controller& operator=(const Controller&) = delete;
+    Controller(Controller&&) = delete;
+    Controller& operator=(Controller&&) = delete;
+
     virtual void open_file(const std::filesystem::path& path);
     virtual std::string line(size_t line_number) const;
     virtual size_t line_count() const;

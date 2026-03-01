@@ -41,6 +41,8 @@ private:
     PieceLocation find_piece(size_t pos) const;
     void split_piece(size_t piece_index, size_t offset_in_piece);
 
+    // Non-owning view into the memory-mapped file data.
+    // Must remain valid for the lifetime of this PieceTable.
     std::span<const std::byte> original_;
     std::string add_buffer_;
     std::vector<Piece> pieces_;

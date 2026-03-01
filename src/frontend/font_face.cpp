@@ -1,8 +1,9 @@
 #include "font_face.h"
 
-#include <stdexcept>
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <stdexcept>
 
 namespace sprawn {
 
@@ -117,16 +118,32 @@ GlyphBitmap FontFace::rasterize_glyph(uint32_t glyph_id) {
                 std::vector<uint8_t> scaled(dst_w * dst_h * 4);
                 for (int dy = 0; dy < dst_h; ++dy) {
                     for (int dx = 0; dx < dst_w; ++dx) {
-                        int sx = static_cast<int>(dx / scale);
-                        int sy = static_cast<int>(dy / scale);
-                        if (sx >= src_w) sx = src_w - 1;
-                        if (sy >= src_h) sy = src_h - 1;
-                        int si = (sy * src_w + sx) * 4;
+                        // Map destination pixel center to source coordinates
+                        double src_x = (dx + 0.5) / scale - 0.5;
+                        double src_y = (dy + 0.5) / scale - 0.5;
+
+                        int x0 = static_cast<int>(std::floor(src_x));
+                        int y0 = static_cast<int>(std::floor(src_y));
+                        int x1 = x0 + 1;
+                        int y1 = y0 + 1;
+                        double fx = src_x - x0;
+                        double fy = src_y - y0;
+
+                        // Clamp to source bounds
+                        x0 = std::clamp(x0, 0, src_w - 1);
+                        x1 = std::clamp(x1, 0, src_w - 1);
+                        y0 = std::clamp(y0, 0, src_h - 1);
+                        y1 = std::clamp(y1, 0, src_h - 1);
+
                         int di = (dy * dst_w + dx) * 4;
-                        scaled[di + 0] = rgba[si + 0];
-                        scaled[di + 1] = rgba[si + 1];
-                        scaled[di + 2] = rgba[si + 2];
-                        scaled[di + 3] = rgba[si + 3];
+                        for (int c = 0; c < 4; ++c) {
+                            double top    = rgba[(y0 * src_w + x0) * 4 + c] * (1.0 - fx)
+                                          + rgba[(y0 * src_w + x1) * 4 + c] * fx;
+                            double bottom = rgba[(y1 * src_w + x0) * 4 + c] * (1.0 - fx)
+                                          + rgba[(y1 * src_w + x1) * 4 + c] * fx;
+                            double val = top * (1.0 - fy) + bottom * fy;
+                            scaled[di + c] = static_cast<uint8_t>(std::clamp(val + 0.5, 0.0, 255.0));
+                        }
                     }
                 }
 
